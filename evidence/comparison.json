@@ -1,0 +1,81 @@
+{
+  "pairs_within_40ms": 59,
+  "CTF_range_C": [
+    34,
+    58
+  ],
+  "CTF_vs_reference_edge": {
+    "mae_C": 0.9367796610169494,
+    "bias_C": -0.9367796610169494,
+    "pearson": 0.9993553351343847,
+    "max_abs_error_C": 1.5499999999999972
+  },
+  "csv_rows": 237,
+  "max_reference_hotspot_edge_delta_C": 7.649999999999999,
+  "loaded_ASIC_MAX_vs_hotspot": {
+    "mae_C": 0.06749999999999981,
+    "bias_C": 0.06749999999999981,
+    "pearson": 0.9983633704451303,
+    "max_abs_error_C": 1.3699999999999974
+  },
+  "pause_ms_mean": 5.062034238501688,
+  "loaded_ASIC_MAX_vs_edge": {
+    "mae_C": 6.827954545454545,
+    "bias_C": 6.827954545454545,
+    "pearson": 0.9954888511011949,
+    "max_abs_error_C": 7.649999999999999
+  },
+  "CTF_vs_reference_hotspot": {
+    "mae_C": 5.895593220338983,
+    "bias_C": -5.868474576271186,
+    "pearson": 0.9978979706194513,
+    "max_abs_error_C": 9.0
+  },
+  "pairs_error_at_most_1C": 58,
+  "max_gfx_busy_pct": 100.0,
+  "ASIC_MAX_vs_reference_edge": {
+    "mae_C": 5.257118644067796,
+    "bias_C": 5.029322033898303,
+    "pearson": 0.9976840338619418,
+    "max_abs_error_C": 7.649999999999999
+  },
+  "all_restored": true,
+  "reference_edge_range_C": [
+    34.77,
+    59.28
+  ],
+  "pause_ms_max": 6.050066993338987,
+  "pairs_gfx_busy_at_least_90pct": 44,
+  "ASIC_MAX_range_C": [
+    34,
+    66
+  ],
+  "max_pair_distance_ms": 3.4024715423583984,
+  "pairs_error_at_most_0_5C": 53,
+  "ASIC_MAX_vs_reference_hotspot": {
+    "mae_C": 0.11694915254237262,
+    "bias_C": 0.09762711864406752,
+    "pearson": 0.9996902014266057,
+    "max_abs_error_C": 1.3699999999999974
+  },
+  "reference_hotspot_range_C": [
+    34.0,
+    66.0
+  ],
+  "example_peak_pair": {
+    "edge_C": 58.43,
+    "pause_ms": 4.5816689962521195,
+    "raw": "0x00007242",
+    "asic_max_temp_C": 66,
+    "utc": "2026-10-20T05:58:21.602003Z",
+    "epoch_s": 1792475901.603,
+    "sample_epoch_s": 1792475901.6020026,
+    "distance_ms": 0.9973049163818359,
+    "group_paused": true,
+    "hotspot_C": 66.0,
+    "ctf_temp_C": 57,
+    "selector_restored": true,
+    "busy_gfx": 100.0
+  },
+  "samples": 67
+}

@@ -1,0 +1,81 @@
+{
+  "ASIC_MAX_vs_reference_edge": {
+    "bias_C": 3.9205999999999963,
+    "pearson": 0.9949449192771516,
+    "mae_C": 3.929266666666663,
+    "max_abs_error_C": 5.219999999999999
+  },
+  "loaded_ASIC_MAX_vs_hotspot": {
+    "bias_C": 0.008148148148148212,
+    "pearson": 0.9944624819499955,
+    "mae_C": 0.07777777777777778,
+    "max_abs_error_C": 1.0
+  },
+  "pairs_error_at_most_0_5C": 139,
+  "pause_ms_mean": 4.456277955692782,
+  "ASIC_MAX_vs_reference_hotspot": {
+    "bias_C": 0.005400000000000063,
+    "pearson": 0.9986465190406577,
+    "mae_C": 0.0962,
+    "max_abs_error_C": 1.4100000000000001
+  },
+  "reference_hotspot_range_C": [
+    28.0,
+    48.0
+  ],
+  "max_gfx_busy_pct": 100.0,
+  "pairs_gfx_busy_at_least_90pct": 135,
+  "ASIC_MAX_range_C": [
+    28,
+    48
+  ],
+  "example_peak_pair": {
+    "utc": "2026-10-27T18:48:02.079868Z",
+    "pause_ms": 5.101680999985092,
+    "group_paused": true,
+    "busy_gfx": 100.0,
+    "sample_epoch_s": 1793126882.0798683,
+    "selector_restored": true,
+    "asic_max_temp_C": 48,
+    "edge_C": 43.43,
+    "hotspot_C": 48.0,
+    "epoch_s": 1793126882.081,
+    "ctf_temp_C": 42,
+    "distance_ms": 1.1317729949951172,
+    "raw": "0x00005430"
+  },
+  "CTF_vs_reference_edge": {
+    "bias_C": -0.8394000000000004,
+    "pearson": 0.9964743520257155,
+    "mae_C": 0.8448666666666668,
+    "max_abs_error_C": 1.4399999999999977
+  },
+  "CTF_range_C": [
+    28,
+    43
+  ],
+  "all_restored": true,
+  "CTF_vs_reference_hotspot": {
+    "bias_C": -4.7546,
+    "pearson": 0.9935743502836,
+    "mae_C": 4.7546,
+    "max_abs_error_C": 6.0
+  },
+  "pause_ms_max": 5.5614009999658265,
+  "pairs_within_40ms": 150,
+  "loaded_ASIC_MAX_vs_edge": {
+    "bias_C": 4.2819999999999965,
+    "pearson": 0.9848391901942536,
+    "mae_C": 4.2819999999999965,
+    "max_abs_error_C": 5.219999999999999
+  },
+  "csv_rows": 600,
+  "max_reference_hotspot_edge_delta_C": 5.060000000000002,
+  "samples": 158,
+  "reference_edge_range_C": [
+    28.5,
+    43.6
+  ],
+  "pairs_error_at_most_1C": 149,
+  "max_pair_distance_ms": 25.364160537719727
+}
