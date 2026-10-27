@@ -6,7 +6,9 @@ All three values come from one RTCore register read: GPU is `CTF_TEMP` (bits 9�
 
 **Quick start:** with MSI Afterburner installed, download the executable and run it as administrator. The compatible driver is found automatically; no file copying is needed.
 
-Windows 10/11 x64, administrator rights, and exactly one supported PCI device (`1002:699F` or `1002:6FDF`) are required. Detection uses the Windows PCI location; no bench-specific address is compiled in. Other device IDs are deliberately not enabled without validation.
+Windows 10/11 x64, administrator rights, and exactly one Polaris GPU are required. Polaris 10/11/12 IDs are accepted, including `67DF` used by RX470/480/570/580 variants, plus the tested `6FDF` and `699F` profiles. Other Polaris boards are allowed even without bench validation. Detection uses the Windows PCI location; no bench-specific address is compiled in.
+
+The panel distinguishes **Perfil testado** (a previously tested PCI/subsystem/revision profile) from **Perfil não testado**. This label does not block collection or certify every board sharing those IDs. A failed or invalid reading shows **N/A / Leitura indisponível**, with no stale temperatures. Unsupported families are not probed. The accepted IDs come from the [Linux Polaris PCI table](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c) and are listed in `include/polaris_devices.hpp`.
 
 ## Register transport
 

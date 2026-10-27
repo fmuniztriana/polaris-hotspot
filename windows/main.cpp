@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 #include "polaris_hotspot.hpp"
+#include "polaris_devices.hpp"
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 class Reader {
@@ -42,14 +43,15 @@ class Reader {
         for (DWORD i=0; SetupDiEnumDeviceInfo(list,i,&item); ++i) {
             wchar_t id[512]{};
             if (!SetupDiGetDeviceInstanceIdW(list,&item,id,512,nullptr)) continue;
-            if (!wcsstr(id,L"VEN_1002&DEV_699F") && !wcsstr(id,L"VEN_1002&DEV_6FDF")) continue;
+            unsigned vendor=0, deviceId=0;
+            if(swscanf_s(id,L"PCI\\VEN_%4x&DEV_%4x",&vendor,&deviceId)!=2 || !polaris::accepts_device(vendor,deviceId)) continue;
             DWORD address=0, candidate=0;
             if (!SetupDiGetDeviceRegistryPropertyW(list,&item,SPDRP_BUSNUMBER,nullptr,reinterpret_cast<BYTE*>(&candidate),4,nullptr) ||
                 !SetupDiGetDeviceRegistryPropertyW(list,&item,SPDRP_ADDRESS,nullptr,reinterpret_cast<BYTE*>(&address),4,nullptr)) continue;
             bus=candidate; slot=address>>16; function=address&0xffff; ++matches;
         }
         SetupDiDestroyDeviceInfoList(list);
-        check(matches==1,"Exactly one supported RX550/RX580 is required");
+        check(matches==1,"Exactly one Polaris GPU is required");
     }
     void openDevice() { device=CreateFileW(L"\\\\.\\RTCore64",GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,0,nullptr); }
     static std::wstring regString(HKEY key,const wchar_t* name) {
@@ -119,10 +121,12 @@ class Reader {
     }
 public:
     DWORD identity=0;
+    bool tested=false;
     void open() {
         locate(); openDevice(); if (device==INVALID_HANDLE_VALUE) startDriver();
         identity=pci(0);
-        check((identity==0x699f1002 || identity==0x6fdf1002) && (pci(4)&2),"GPU identity or memory decoding invalid");
+        check(polaris::accepts_device(identity&0xFFFF,identity>>16) && (pci(4)&2),"GPU identity or memory decoding invalid");
+        tested=polaris::tested_profile(identity>>16,pci(0x2c),pci(8)&0xFF);
         DWORD bar=pci(0x24); check(bar && bar!=0xffffffff && (bar&15)==0,"Unsupported BAR5");
         std::uint64_t physical=bar; std::memcpy(mapping.data(),&physical,8);
         put(mapping.data(),16,4096); put(mapping.data(),32,bus); put(mapping.data(),36,slot); put(mapping.data(),40,function); put(mapping.data(),44,5);
@@ -157,13 +161,15 @@ public:
 };
 
 static std::unique_ptr<Reader> reader;
-static HWND valueLabel,coreLabel,deltaLabel;
+static HWND valueLabel,coreLabel,deltaLabel,statusLabel;
+static std::string startupError;
 static HFONT font;
 static FILE* logFile=nullptr;
 static unsigned sampleLimit=0, samples=0;
 static int result=0;
 static void acquire(HWND window) {
     try {
+        if(!startupError.empty()) throw std::runtime_error(startupError);
         DWORD raw=reader->sample(); unsigned temp=polaris::decode_hotspot(raw);
         unsigned core=(raw>>9)&0x1FFu;
         check(core>0 && core<=150,"Invalid GPU temperature");
@@ -171,12 +177,14 @@ static void acquire(HWND window) {
         wchar_t text[32]; swprintf_s(text,L"%u \x00B0" L"C",temp); SetWindowTextW(valueLabel,text);
         swprintf_s(text,L"%u \x00B0" L"C",core);SetWindowTextW(coreLabel,text);
         swprintf_s(text,L"%+d \x00B0" L"C",delta);SetWindowTextW(deltaLabel,text);
+        SetWindowTextW(statusLabel,reader->tested?L"Perfil testado":L"Perfil não testado");
         if(logFile) { fprintf(logFile,"%llu,0x%08lX,%u,true,%u,%d\n",GetTickCount64(),raw,temp,core,delta);fflush(logFile); }
         if(sampleLimit && ++samples>=sampleLimit) DestroyWindow(window);
     } catch(const std::exception& e) {
         KillTimer(window,1); SetWindowTextW(valueLabel,L"N/A");SetWindowTextW(coreLabel,L"N/A");SetWindowTextW(deltaLabel,L"N/A"); result=1;
+        SetWindowTextW(statusLabel,L"Leitura indisponível");
         if(logFile) { fprintf(logFile,"ERROR,%s\n",e.what()); fflush(logFile); }
-        if(sampleLimit) DestroyWindow(window); else MessageBoxA(window,e.what(),"Hotspot",MB_ICONERROR);
+        if(sampleLimit) DestroyWindow(window);
     }
 }
 static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
@@ -194,6 +202,7 @@ static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
         SendMessageW(coreLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
         SendMessageW(valueLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
         SendMessageW(deltaLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
+        statusLabel=CreateWindowW(L"STATIC",L"",WS_CHILD|WS_VISIBLE|SS_CENTER,16,147,246,22,window,nullptr,nullptr,nullptr);
         SetTimer(window,1,1000,nullptr); PostMessageW(window,WM_APP,0,0); return 0;
     case WM_TIMER: case WM_APP: acquire(window); return 0;
     case WM_DESTROY: KillTimer(window,1); PostQuitMessage(result); return 0;
@@ -209,12 +218,13 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
             else throw std::runtime_error("Options: --samples N --log new-file.csv");
         }
         LocalFree(args);
-        reader=std::make_unique<Reader>(); reader->open();
+        reader=std::make_unique<Reader>();
+        try{reader->open();}catch(const std::exception& e){startupError=e.what();}
         if(logFile) { fprintf(logFile,"# pci=0x%08lX\nuptime_ms,raw,hotspot_c,selector_restored,gpu_c,delta_c\n",reader->identity); fflush(logFile); }
         WNDCLASSW cls{}; cls.lpfnWndProc=windowProc; cls.hInstance=instance; cls.lpszClassName=L"PolarisHotspotWindow"; cls.hCursor=LoadCursor(nullptr,IDC_ARROW); cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
         cls.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(101));
         check(RegisterClassW(&cls)!=0,"Window registration failed");
-        HWND window=CreateWindowW(cls.lpszClassName,L"Polaris Hotspot",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,296,193,nullptr,nullptr,instance,nullptr);
+        HWND window=CreateWindowW(cls.lpszClassName,L"Polaris Hotspot",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,296,220,nullptr,nullptr,instance,nullptr);
         check(window!=nullptr,"Window creation failed");
         HICON smallIcon=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED));
         SendMessageW(window,WM_SETICON,ICON_SMALL,reinterpret_cast<LPARAM>(smallIcon));
