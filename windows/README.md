@@ -28,13 +28,14 @@ This application needs a compatible RTCore64 register-access driver. A kernel dr
 
 If no driver is already available, the program searches for a compatible `RTCore64.sys` beside the executable, then in the MSI Afterburner installation recorded in the Windows uninstall registry (32-bit and 64-bit views), and finally in the standard Program Files locations. An existing Afterburner installation can therefore be used directly, without copying its driver or opening the Afterburner application. Custom installations are discovered through their registered installation/uninstall location.
 
-Each candidate is checked before loading. An incompatible candidate is skipped; if no supported file is found, the program displays an error. The supported file has SHA-256:
+Each candidate is checked before loading. An incompatible candidate is skipped; if no supported file is found, the program displays an error. The following SHA-256 hashes cover the inspected Afterburner 4.6.5, 4.6.6 and 4.6.7 Beta 2 packages (the latter two contain the same driver):
 
 ```text
 F1C8CA232789C2F11A511C8CD95A9F3830DD719CAD5AA22CB7C3539AB8CB4DC3
+A4F44E267698D47F6A905E96B356582B4EE9CF4049E8C792FFDA1B7356E68D35
 ```
 
-The program checks this hash before creating its temporary `PolarisHotspotRTCore` service. It stops/removes that service on normal exit, but does not stop a driver that was already running. Windows must permit loading this driver; the application does not change security settings. If the process is forcibly terminated, a created service can remain and require administrator cleanup.
+The program checks the hash before starting its temporary `PolarisHotspotRTCore` service. A hidden copy of the same executable watches the reader and requests the stop and removal of the service it created, including when the reader process is forcibly terminated. If another client has the driver open, Windows keeps it available until that client closes it, then completes the removal. A driver already running is reused and left alone. Only one reader instance is allowed while its cleanup is pending. If the reader and helper are both forcibly terminated, the helper cannot clean up; the service may remain loaded. Windows must permit loading the driver; the application does not change security settings. If cleanup fails, details are written to `%TEMP%\PolarisHotspot-cleanup.log`.
 
 The collector coordinates indirect SMU access with `Global\Access_PCI`, validates selection/restoration, and writes only the SMU selector. Other monitors and drivers may not honor this mutex; simultaneous monitoring is not universally validated. A failed read stops acquisition and displays an error instead of retaining a stale temperature.
 

@@ -20,12 +20,12 @@
 #include "BoardInfo.hpp"
 #include "polaris_memory_bios.hpp"
 #include "polaris_slt.hpp"
+#include "ServiceGuard.hpp"
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 class Reader {
     static constexpr DWORD grbmIndex=0xC200u*4; // Register index -> BAR5 byte offset.
     HANDLE device = INVALID_HANDLE_VALUE, mutex = nullptr;
-    SC_HANDLE manager = nullptr, service = nullptr;
     std::array<unsigned char,48> mapping{};
     bool mapped = false;
     DWORD bus = 0, slot = 0, function = 0;
@@ -113,34 +113,19 @@ class Reader {
         }
         return paths;
     }
-    static bool compatible(const std::wstring& path) {
-        std::ifstream input(path,std::ios::binary|std::ios::ate);
-        if(!input || input.tellg()<=0 || input.tellg()>1024*1024) return false;
-        input.seekg(0);
-        std::string bytes((std::istreambuf_iterator<char>(input)),{});
-        if(bytes.empty()) return false;
-        unsigned char digest[32]{};
-        if(BCryptHash(BCRYPT_SHA256_ALG_HANDLE,nullptr,0,reinterpret_cast<PUCHAR>(&bytes[0]),static_cast<ULONG>(bytes.size()),digest,32)!=0) return false;
-        const unsigned char expected[32]={0xf1,0xc8,0xca,0x23,0x27,0x89,0xc2,0xf1,0x1a,0x51,0x1c,0x8c,0xd9,0x5a,0x9f,0x38,0x30,0xdd,0x71,0x9c,0xad,0x5a,0xa2,0x2c,0xb7,0xc3,0x53,0x9a,0xb8,0xcb,0x4d,0xc3};
-        return std::memcmp(digest,expected,32)==0;
-    }
-    void startDriver() {
+    void startDriver(HANDLE lifecycleGate) {
         std::wstring path;
-        for(const auto& candidate:driverPaths()) if(compatible(candidate)) { path=candidate; break; }
+        for(const auto& candidate:driverPaths()) if(service_guard::compatible(candidate)) { path=candidate; break; }
         check(!path.empty(),"Compatible RTCore64.sys not found in MSI Afterburner or beside this EXE");
-        manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CREATE_SERVICE);
-        check(manager!=nullptr,"Administrator access required");
-        service=CreateServiceW(manager,L"PolarisHotspotRTCore",L"Polaris Hotspot register access",SERVICE_START|SERVICE_STOP|DELETE|SERVICE_QUERY_STATUS,SERVICE_KERNEL_DRIVER,SERVICE_DEMAND_START,SERVICE_ERROR_NORMAL,path.c_str(),nullptr,nullptr,nullptr,nullptr,nullptr);
-        check(service!=nullptr,"Cannot create temporary driver service; check for another instance");
-        check(StartServiceW(service,0,nullptr)!=FALSE,"Windows could not load the register driver");
+        check(service_guard::launch(lifecycleGate,path),"Windows could not start the temporary RTCore service");
         openDevice(); check(device!=INVALID_HANDLE_VALUE,"Driver device unavailable");
     }
 public:
     BoardInfo board;
     DWORD identity=0;
     bool tested=false;
-    void open() {
-        locate(); openDevice(); if (device==INVALID_HANDLE_VALUE) startDriver();
+    void open(HANDLE lifecycleGate) {
+        locate(); openDevice(); if (device==INVALID_HANDLE_VALUE) startDriver(lifecycleGate);
         identity=pci(0);
         check(polaris::accepts_device(identity&0xFFFF,identity>>16) && (pci(4)&2),"GPU identity or memory decoding invalid");
         tested=polaris::tested_profile(identity>>16,pci(0x2c),pci(8)&0xFF);
@@ -232,8 +217,6 @@ public:
         if(mapped) { DWORD bytes=0; DeviceIoControl(device,0x80002044,mapping.data(),48,nullptr,0,&bytes,nullptr); }
         if(device!=INVALID_HANDLE_VALUE) CloseHandle(device);
         if(mutex) CloseHandle(mutex);
-        if(service) { SERVICE_STATUS status{}; ControlService(service,SERVICE_CONTROL_STOP,&status); DeleteService(service); CloseServiceHandle(service); }
-        if(manager) CloseServiceHandle(manager);
     }
 };
 
@@ -309,16 +292,26 @@ static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
     return DefWindowProcW(window,message,w,l);
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
+    HANDLE lifecycleGate=nullptr;
     try {
         int count=0; auto args=CommandLineToArgvW(GetCommandLineW(),&count); check(args!=nullptr,"Arguments unavailable");
+        if(count==7 && std::wstring(args[1])==L"--service-guardian"){
+            auto handle=[&](int index){return reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(std::stoull(args[index])));};
+            HANDLE parent=handle(2),gate=handle(3),ready=handle(4),success=handle(5);std::wstring path=args[6];LocalFree(args);
+            return service_guard::run(parent,gate,ready,success,path);
+        }
         for(int i=1;i<count;++i) {
             if(std::wstring(args[i])==L"--samples" && i+1<count) { sampleLimit=std::stoul(args[++i]); check(sampleLimit>0,"Sample count must be positive"); }
             else if(std::wstring(args[i])==L"--log" && i+1<count) { check(logFile==nullptr,"Duplicate log option"); check(_wfopen_s(&logFile,args[++i],L"wx")==0,"Cannot create new log file"); }
             else throw std::runtime_error("Options: --samples N --log new-file.csv");
         }
         LocalFree(args);
+        SECURITY_ATTRIBUTES security{sizeof(security),nullptr,TRUE};
+        lifecycleGate=CreateEventW(&security,TRUE,FALSE,L"Global\\PolarisHotspot.Lifecycle");
+        check(lifecycleGate!=nullptr,"Cannot initialize lifecycle guard");
+        if(GetLastError()==ERROR_ALREADY_EXISTS){CloseHandle(lifecycleGate);lifecycleGate=nullptr;throw std::runtime_error("Polaris Hotspot is already running or finishing cleanup");}
         reader=std::make_unique<Reader>();
-        try{reader->open();}catch(const std::exception& e){startupError=e.what();}
+        try{reader->open(lifecycleGate);}catch(const std::exception& e){startupError=e.what();}
         if(logFile) { fprintf(logFile,"# pci=0x%08lX;identification_reads=%u\n",reader->identity,reader->board.acquisitions);fprintf(logFile,"# name=%ls;units=%ls;revision=%ls;vbios=%ls;sid=%ls\n",reader->board.name.c_str(),reader->board.units.c_str(),reader->board.revision.c_str(),reader->board.bios.c_str(),reader->board.sid.c_str());fprintf(logFile,"# asic_quality=%ls;quality_raw=%u\n",reader->board.quality.c_str(),reader->board.qualityRaw);fprintf(logFile,"uptime_ms,raw,hotspot_c,selector_restored,gpu_c,delta_c\n"); fflush(logFile); }
         if(logFile){fprintf(logFile,"# slt=%ls\n",reader->board.slt.c_str());fprintf(logFile,"# memory_reads=%u;vendor=%ls;model=%ls;bytes=%llu;module=%u;memory_error=%s\n",reader->board.memoryAcquisitions,reader->board.memoryVendor.c_str(),reader->board.memoryModel.c_str(),reader->board.memoryBytes,reader->board.memoryModule,reader->board.memoryError.c_str());fflush(logFile);}
         WNDCLASSW cls{}; cls.lpfnWndProc=windowProc; cls.hInstance=instance; cls.lpszClassName=L"PolarisHotspotWindow"; cls.hCursor=LoadCursor(nullptr,IDC_ARROW); cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
@@ -335,5 +328,5 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
         result=1; if(logFile) { fprintf(logFile,"ERROR,%s\n",e.what()); fflush(logFile); }
         if(!sampleLimit) MessageBoxA(nullptr,e.what(),"Polaris Hotspot",MB_ICONERROR);
     }
-    reader.reset(); if(font) DeleteObject(font);if(detailsFont)DeleteObject(detailsFont); if(logFile) fclose(logFile); return result;
+    reader.reset();if(lifecycleGate)CloseHandle(lifecycleGate); if(font) DeleteObject(font);if(detailsFont)DeleteObject(detailsFont); if(logFile) fclose(logFile); return result;
 }

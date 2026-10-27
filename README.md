@@ -6,6 +6,8 @@ Minimal C++ recipe for reading the firmware-reported hotspot on AMD Polaris, val
 
 [Download PolarisHotspot.exe](https://github.com/fmuniztriana/polaris-hotspot/releases/latest) and run as administrator with MSI Afterburner installed. It shows **GPU, Hotspot and Delta**, updated every second, and finds the compatible RTCore driver automatically. No copying files or opening Afterburner is needed.
 
+The validated RTCore files from Afterburner **4.6.5, 4.6.6 and 4.6.7 Beta 2** are accepted. The reader cleans up its own temporary driver service when it closes; an already-running driver is left alone.
+
 ![Polaris Hotspot panel](windows/assets/panel.png)
 
 Both temperatures come from the same register read; delta is `Hotspot − GPU`. See [setup and build instructions](windows/README.md).
