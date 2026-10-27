@@ -2,6 +2,10 @@
 
 Minimal C++ recipe for reading the firmware-reported hotspot on AMD Polaris, validated under load on an RX 580 and an RX 550 (Lexa).
 
+## Windows display
+
+[Download PolarisHotspot.exe](https://github.com/fmuniztriana/polaris-hotspot/releases/latest) for a small window showing only hotspot, refreshed once per second. See [setup and build instructions](windows/README.md). Administrator access and the documented compatible register-access driver are required; the driver is not bundled. The program does not start a workload.
+
 ## The entire recipe
 
 SMU register **`CG_MULT_THERMAL_STATUS = 0xC0300014`**, field **`ASIC_MAX_TEMP`, bits 0–8**, contains whole degrees Celsius. Access it through BAR5 byte offsets `0x210` (selector) and `0x214` (data):

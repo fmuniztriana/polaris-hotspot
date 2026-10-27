@@ -1,0 +1,165 @@
+#define UNICODE
+#define _UNICODE
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <setupapi.h>
+#include <devguid.h>
+#include <shellapi.h>
+#include <bcrypt.h>
+#include <array>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include "polaris_hotspot.hpp"
+
+static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+class Reader {
+    HANDLE device = INVALID_HANDLE_VALUE, mutex = nullptr;
+    SC_HANDLE manager = nullptr, service = nullptr;
+    std::array<unsigned char,48> mapping{};
+    bool mapped = false;
+    DWORD bus = 0, slot = 0, function = 0;
+    static void put(unsigned char* p, unsigned offset, DWORD v) { std::memcpy(p+offset,&v,4); }
+    static DWORD get(const unsigned char* p, unsigned offset) { DWORD v; std::memcpy(&v,p+offset,4); return v; }
+    void io(DWORD code, unsigned char* data, DWORD size) {
+        DWORD bytes=0;
+        check(DeviceIoControl(device,code,data,size,data,size,&bytes,nullptr) && bytes==size,"Register transport failed");
+    }
+    DWORD pci(DWORD offset) {
+        std::array<unsigned char,24> b{};
+        put(b.data(),0,bus); put(b.data(),4,slot); put(b.data(),8,function);
+        put(b.data(),12,offset); put(b.data(),16,4); io(0x80002050,b.data(),24); return get(b.data(),20);
+    }
+    void locate() {
+        HDEVINFO list=SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY,nullptr,nullptr,DIGCF_PRESENT);
+        check(list!=INVALID_HANDLE_VALUE,"GPU enumeration failed");
+        unsigned matches=0; SP_DEVINFO_DATA item{}; item.cbSize=sizeof item;
+        for (DWORD i=0; SetupDiEnumDeviceInfo(list,i,&item); ++i) {
+            wchar_t id[512]{};
+            if (!SetupDiGetDeviceInstanceIdW(list,&item,id,512,nullptr)) continue;
+            if (!wcsstr(id,L"VEN_1002&DEV_699F") && !wcsstr(id,L"VEN_1002&DEV_6FDF")) continue;
+            DWORD address=0, candidate=0;
+            if (!SetupDiGetDeviceRegistryPropertyW(list,&item,SPDRP_BUSNUMBER,nullptr,reinterpret_cast<BYTE*>(&candidate),4,nullptr) ||
+                !SetupDiGetDeviceRegistryPropertyW(list,&item,SPDRP_ADDRESS,nullptr,reinterpret_cast<BYTE*>(&address),4,nullptr)) continue;
+            bus=candidate; slot=address>>16; function=address&0xffff; ++matches;
+        }
+        SetupDiDestroyDeviceInfoList(list);
+        check(matches==1,"Exactly one supported RX550/RX580 is required");
+    }
+    void openDevice() { device=CreateFileW(L"\\\\.\\RTCore64",GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,0,nullptr); }
+    void startDriver() {
+        wchar_t filename[MAX_PATH]{};
+        check(GetModuleFileNameW(nullptr,filename,MAX_PATH)>0,"Executable path unavailable");
+        std::wstring path=filename; path.resize(path.find_last_of(L"\\/")+1); path+=L"RTCore64.sys";
+        std::ifstream input(path,std::ios::binary);
+        check(bool(input),"Place the documented RTCore64.sys next to this EXE, or start a compatible driver first");
+        std::string bytes((std::istreambuf_iterator<char>(input)),{});
+        check(!bytes.empty(),"Empty driver file");
+        unsigned char digest[32]{};
+        check(BCryptHash(BCRYPT_SHA256_ALG_HANDLE,nullptr,0,reinterpret_cast<PUCHAR>(&bytes[0]),static_cast<ULONG>(bytes.size()),digest,32)==0,"Driver hash failed");
+        const unsigned char expected[32]={0xf1,0xc8,0xca,0x23,0x27,0x89,0xc2,0xf1,0x1a,0x51,0x1c,0x8c,0xd9,0x5a,0x9f,0x38,0x30,0xdd,0x71,0x9c,0xad,0x5a,0xa2,0x2c,0xb7,0xc3,0x53,0x9a,0xb8,0xcb,0x4d,0xc3};
+        check(std::memcmp(digest,expected,32)==0,"Unsupported RTCore64.sys version");
+        manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CREATE_SERVICE);
+        check(manager!=nullptr,"Administrator access required");
+        service=CreateServiceW(manager,L"PolarisHotspotRTCore",L"Polaris Hotspot register access",SERVICE_START|SERVICE_STOP|DELETE|SERVICE_QUERY_STATUS,SERVICE_KERNEL_DRIVER,SERVICE_DEMAND_START,SERVICE_ERROR_NORMAL,path.c_str(),nullptr,nullptr,nullptr,nullptr,nullptr);
+        check(service!=nullptr,"Cannot create temporary driver service; check for another instance");
+        check(StartServiceW(service,0,nullptr)!=FALSE,"Windows could not load the register driver");
+        openDevice(); check(device!=INVALID_HANDLE_VALUE,"Driver device unavailable");
+    }
+public:
+    DWORD identity=0;
+    void open() {
+        locate(); openDevice(); if (device==INVALID_HANDLE_VALUE) startDriver();
+        identity=pci(0);
+        check((identity==0x699f1002 || identity==0x6fdf1002) && (pci(4)&2),"GPU identity or memory decoding invalid");
+        DWORD bar=pci(0x24); check(bar && bar!=0xffffffff && (bar&15)==0,"Unsupported BAR5");
+        std::uint64_t physical=bar; std::memcpy(mapping.data(),&physical,8);
+        put(mapping.data(),16,4096); put(mapping.data(),32,bus); put(mapping.data(),36,slot); put(mapping.data(),40,function); put(mapping.data(),44,5);
+        io(0x80002040,mapping.data(),48); mapped=true;
+        mutex=CreateMutexW(nullptr,FALSE,L"Global\\Access_PCI"); check(mutex!=nullptr,"PCI mutex unavailable");
+    }
+    DWORD read(DWORD offset) {
+        check(offset==0x210 || offset==0x214,"Unexpected read offset");
+        auto b=mapping; put(b.data(),20,offset); put(b.data(),24,4); io(0x80002048,b.data(),48); return get(b.data(),28);
+    }
+    void write(DWORD offset,DWORD value) {
+        check(offset==0x210,"Only the thermal selector may be written");
+        auto b=mapping; put(b.data(),20,offset); put(b.data(),24,4); put(b.data(),28,value); io(0x8000204c,b.data(),48);
+    }
+    DWORD sample() {
+        DWORD wait=WaitForSingleObject(mutex,200);
+        check(wait==WAIT_OBJECT_0 || wait==WAIT_ABANDONED,"PCI access busy");
+        try {
+            auto raw=polaris::read_thermal_word([this](DWORD p){return read(p);},[this](DWORD p,DWORD v){write(p,v);});
+            check(polaris::decode_hotspot(raw)>0 && polaris::decode_hotspot(raw)<=150,"Invalid hotspot value");
+            ReleaseMutex(mutex);
+            return raw;
+        } catch (...) { ReleaseMutex(mutex); throw; }
+    }
+    ~Reader() {
+        if(mapped) { DWORD bytes=0; DeviceIoControl(device,0x80002044,mapping.data(),48,nullptr,0,&bytes,nullptr); }
+        if(device!=INVALID_HANDLE_VALUE) CloseHandle(device);
+        if(mutex) CloseHandle(mutex);
+        if(service) { SERVICE_STATUS status{}; ControlService(service,SERVICE_CONTROL_STOP,&status); DeleteService(service); CloseServiceHandle(service); }
+        if(manager) CloseServiceHandle(manager);
+    }
+};
+
+static std::unique_ptr<Reader> reader;
+static HWND valueLabel;
+static HFONT font;
+static FILE* logFile=nullptr;
+static unsigned sampleLimit=0, samples=0;
+static int result=0;
+static void acquire(HWND window) {
+    try {
+        DWORD raw=reader->sample(); unsigned temp=polaris::decode_hotspot(raw);
+        wchar_t text[32]; swprintf_s(text,L"%u \x00B0" L"C",temp); SetWindowTextW(valueLabel,text);
+        if(logFile) { fprintf(logFile,"%llu,0x%08lX,%u,true\n",GetTickCount64(),raw,temp); fflush(logFile); }
+        if(sampleLimit && ++samples>=sampleLimit) DestroyWindow(window);
+    } catch(const std::exception& e) {
+        KillTimer(window,1); SetWindowTextW(valueLabel,L"Unavailable"); result=1;
+        if(logFile) { fprintf(logFile,"ERROR,%s\n",e.what()); fflush(logFile); }
+        if(sampleLimit) DestroyWindow(window); else MessageBoxA(window,e.what(),"Hotspot",MB_ICONERROR);
+    }
+}
+static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
+    switch(message) {
+    case WM_CREATE:
+        CreateWindowW(L"STATIC",L"Hotspot",WS_CHILD|WS_VISIBLE|SS_CENTER,15,12,230,24,window,nullptr,nullptr,nullptr);
+        valueLabel=CreateWindowW(L"STATIC",L"--",WS_CHILD|WS_VISIBLE|SS_CENTER,15,40,230,56,window,nullptr,nullptr,nullptr);
+        font=CreateFontW(-36,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+        SendMessageW(valueLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
+        SetTimer(window,1,1000,nullptr); PostMessageW(window,WM_APP,0,0); return 0;
+    case WM_TIMER: case WM_APP: acquire(window); return 0;
+    case WM_DESTROY: KillTimer(window,1); PostQuitMessage(result); return 0;
+    }
+    return DefWindowProcW(window,message,w,l);
+}
+int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
+    try {
+        int count=0; auto args=CommandLineToArgvW(GetCommandLineW(),&count); check(args!=nullptr,"Arguments unavailable");
+        for(int i=1;i<count;++i) {
+            if(std::wstring(args[i])==L"--samples" && i+1<count) { sampleLimit=std::stoul(args[++i]); check(sampleLimit>0,"Sample count must be positive"); }
+            else if(std::wstring(args[i])==L"--log" && i+1<count) { check(logFile==nullptr,"Duplicate log option"); check(_wfopen_s(&logFile,args[++i],L"wx")==0,"Cannot create new log file"); }
+            else throw std::runtime_error("Options: --samples N --log new-file.csv");
+        }
+        LocalFree(args);
+        reader=std::make_unique<Reader>(); reader->open();
+        if(logFile) { fprintf(logFile,"# pci=0x%08lX\nuptime_ms,raw,hotspot_c,selector_restored\n",reader->identity); fflush(logFile); }
+        WNDCLASSW cls{}; cls.lpfnWndProc=windowProc; cls.hInstance=instance; cls.lpszClassName=L"PolarisHotspotWindow"; cls.hCursor=LoadCursor(nullptr,IDC_ARROW); cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
+        check(RegisterClassW(&cls)!=0,"Window registration failed");
+        HWND window=CreateWindowW(cls.lpszClassName,L"Polaris Hotspot",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,276,145,nullptr,nullptr,instance,nullptr);
+        check(window!=nullptr,"Window creation failed"); ShowWindow(window,show);
+        MSG msg{}; int rc; while((rc=GetMessageW(&msg,nullptr,0,0))>0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+        if(rc<0) result=1;
+    } catch(const std::exception& e) {
+        result=1; if(logFile) { fprintf(logFile,"ERROR,%s\n",e.what()); fflush(logFile); }
+        if(!sampleLimit) MessageBoxA(nullptr,e.what(),"Polaris Hotspot",MB_ICONERROR);
+    }
+    reader.reset(); if(font) DeleteObject(font); if(logFile) fclose(logFile); return result;
+}
