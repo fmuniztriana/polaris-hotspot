@@ -1,6 +1,8 @@
 # Minimal Windows hotspot display
 
-`PolarisHotspot.exe` displays only the hotspot and updates once per second. Close the window to stop. It does not start a graphics workload or query memory temperatures.
+`PolarisHotspot.exe` displays GPU temperature, hotspot and their delta once per second. Close the window to stop. It does not start a graphics workload or query memory temperatures.
+
+All three values come from one RTCore register read: GPU is `CTF_TEMP` (bits 9–17), hotspot is `ASIC_MAX_TEMP` (bits 0–8), and delta is hotspot minus GPU. Both temperatures use whole degrees Celsius; GPU is the SMU7 temperature field used by the Linux driver, not a fractional or averaged reading from a monitoring API. No ADL dependency is added.
 
 **Quick start:** with MSI Afterburner installed, download the executable and run it as administrator. The compatible driver is found automatically; no file copying is needed.
 
@@ -46,8 +48,10 @@ Tested on 2026-10-27 with RX550 `1002:699F`, revision C7, subsystem `1002:0B04`,
 
 This validates the Windows collector at idle; the separate Linux evidence validates the register against reference telemetry under load. It is not a new Windows load test or validation of concurrent third-party monitoring.
 
-![Minimal hotspot window on RX550](../evidence/windows-rx550/window.png)
+![GPU, hotspot and delta on RX550 under load](assets/panel.png)
 
 [Raw samples, executable hash and test summary](../evidence/windows-rx550/).
 
 **v0.1.1 discovery test:** RX550, 10 readings at 25 °C, median interval 1000 ms, 10/10 selector restorations, exit code 0. No adjacent driver file and no RTCore running before launch. The temporary service loaded the driver directly from the Afterburner installation and was removed on exit. Watchdog remained active; same boot and GPU error code 0.
+
+**v0.1.2:** adds GPU temperature, signed delta and the Polaris icon. Both temperatures come from the same register. The icon build completed 10 readings with correct deltas and selector restoration on RX550, exit code 0. A preceding test of this collector under graphics load recorded 60 samples, reaching GPU 46 °C, hotspot 54 °C and a maximum delta of 10 °C; the supervisor did not save its final summary, so those readings are not presented as a full benchmark pass.

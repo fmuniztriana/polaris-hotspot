@@ -157,7 +157,7 @@ public:
 };
 
 static std::unique_ptr<Reader> reader;
-static HWND valueLabel;
+static HWND valueLabel,coreLabel,deltaLabel;
 static HFONT font;
 static FILE* logFile=nullptr;
 static unsigned sampleLimit=0, samples=0;
@@ -165,11 +165,16 @@ static int result=0;
 static void acquire(HWND window) {
     try {
         DWORD raw=reader->sample(); unsigned temp=polaris::decode_hotspot(raw);
+        unsigned core=(raw>>9)&0x1FFu;
+        check(core>0 && core<=150,"Invalid GPU temperature");
+        int delta=static_cast<int>(temp)-static_cast<int>(core);
         wchar_t text[32]; swprintf_s(text,L"%u \x00B0" L"C",temp); SetWindowTextW(valueLabel,text);
-        if(logFile) { fprintf(logFile,"%llu,0x%08lX,%u,true\n",GetTickCount64(),raw,temp); fflush(logFile); }
+        swprintf_s(text,L"%u \x00B0" L"C",core);SetWindowTextW(coreLabel,text);
+        swprintf_s(text,L"%+d \x00B0" L"C",delta);SetWindowTextW(deltaLabel,text);
+        if(logFile) { fprintf(logFile,"%llu,0x%08lX,%u,true,%u,%d\n",GetTickCount64(),raw,temp,core,delta);fflush(logFile); }
         if(sampleLimit && ++samples>=sampleLimit) DestroyWindow(window);
     } catch(const std::exception& e) {
-        KillTimer(window,1); SetWindowTextW(valueLabel,L"Unavailable"); result=1;
+        KillTimer(window,1); SetWindowTextW(valueLabel,L"N/A");SetWindowTextW(coreLabel,L"N/A");SetWindowTextW(deltaLabel,L"N/A"); result=1;
         if(logFile) { fprintf(logFile,"ERROR,%s\n",e.what()); fflush(logFile); }
         if(sampleLimit) DestroyWindow(window); else MessageBoxA(window,e.what(),"Hotspot",MB_ICONERROR);
     }
@@ -177,10 +182,18 @@ static void acquire(HWND window) {
 static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
     switch(message) {
     case WM_CREATE:
-        CreateWindowW(L"STATIC",L"Hotspot",WS_CHILD|WS_VISIBLE|SS_CENTER,15,12,230,24,window,nullptr,nullptr,nullptr);
-        valueLabel=CreateWindowW(L"STATIC",L"--",WS_CHILD|WS_VISIBLE|SS_CENTER,15,40,230,56,window,nullptr,nullptr,nullptr);
-        font=CreateFontW(-36,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+        font=CreateFontW(-26,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+        for(int row=0;row<3;row++){
+            const wchar_t* labels[]={L"GPU",L"Hotspot",L"Delta"};
+            HWND label=CreateWindowW(L"STATIC",labels[row],WS_CHILD|WS_VISIBLE,16,16+row*44,100,34,window,nullptr,nullptr,nullptr);
+            SendMessageW(label,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
+        }
+        coreLabel=CreateWindowW(L"STATIC",L"--",WS_CHILD|WS_VISIBLE|SS_RIGHT,122,16,140,34,window,nullptr,nullptr,nullptr);
+        valueLabel=CreateWindowW(L"STATIC",L"--",WS_CHILD|WS_VISIBLE|SS_RIGHT,122,60,140,34,window,nullptr,nullptr,nullptr);
+        deltaLabel=CreateWindowW(L"STATIC",L"--",WS_CHILD|WS_VISIBLE|SS_RIGHT,122,104,140,34,window,nullptr,nullptr,nullptr);
+        SendMessageW(coreLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
         SendMessageW(valueLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
+        SendMessageW(deltaLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
         SetTimer(window,1,1000,nullptr); PostMessageW(window,WM_APP,0,0); return 0;
     case WM_TIMER: case WM_APP: acquire(window); return 0;
     case WM_DESTROY: KillTimer(window,1); PostQuitMessage(result); return 0;
@@ -197,11 +210,15 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
         }
         LocalFree(args);
         reader=std::make_unique<Reader>(); reader->open();
-        if(logFile) { fprintf(logFile,"# pci=0x%08lX\nuptime_ms,raw,hotspot_c,selector_restored\n",reader->identity); fflush(logFile); }
+        if(logFile) { fprintf(logFile,"# pci=0x%08lX\nuptime_ms,raw,hotspot_c,selector_restored,gpu_c,delta_c\n",reader->identity); fflush(logFile); }
         WNDCLASSW cls{}; cls.lpfnWndProc=windowProc; cls.hInstance=instance; cls.lpszClassName=L"PolarisHotspotWindow"; cls.hCursor=LoadCursor(nullptr,IDC_ARROW); cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
+        cls.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(101));
         check(RegisterClassW(&cls)!=0,"Window registration failed");
-        HWND window=CreateWindowW(cls.lpszClassName,L"Polaris Hotspot",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,276,145,nullptr,nullptr,instance,nullptr);
-        check(window!=nullptr,"Window creation failed"); ShowWindow(window,show);
+        HWND window=CreateWindowW(cls.lpszClassName,L"Polaris Hotspot",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,296,193,nullptr,nullptr,instance,nullptr);
+        check(window!=nullptr,"Window creation failed");
+        HICON smallIcon=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED));
+        SendMessageW(window,WM_SETICON,ICON_SMALL,reinterpret_cast<LPARAM>(smallIcon));
+        ShowWindow(window,show);
         MSG msg{}; int rc; while((rc=GetMessageW(&msg,nullptr,0,0))>0) { TranslateMessage(&msg); DispatchMessageW(&msg); }
         if(rc<0) result=1;
     } catch(const std::exception& e) {
