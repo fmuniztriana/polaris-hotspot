@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run on capture host to parse reference local timestamps without assuming timezone."""
+"""Recompute the comparison from UTC reference timestamps."""
 import csv
 import datetime
 import json
@@ -28,8 +28,8 @@ def main():
         rows = []
         for line in reader:
             try:
-                stamp = datetime.datetime.strptime(line['timestamp'].strip(), '%a %d %b %Y %H:%M:%S.%f')
-                epoch = stamp.replace(tzinfo=datetime.timezone(datetime.timedelta(hours=-3))).timestamp()
+                stamp = datetime.datetime.strptime(line['timestamp'].strip(), '%Y-%m-%dT%H:%M:%S.%fZ')
+                epoch = stamp.replace(tzinfo=datetime.timezone.utc).timestamp()
                 rows.append({'epoch_s': epoch, 'edge_C': float(line['edge_c']),
                              'hotspot_C': float(line['hotspot_c']),
                              'busy_gfx': float(line['busy_gfx_pct'])})
@@ -46,7 +46,7 @@ def main():
             pair['distance_ms'] = distance*1000
             pairs.append(pair)
     if not pairs:
-        raise RuntimeError('No timestamp pairs within 40 ms; inspect CSV/timezone')
+        raise RuntimeError('No timestamp pairs within 40 ms; inspect input timestamps')
     raw = [p['asic_max_temp_C'] for p in pairs]
     ctf = [p['ctf_temp_C'] for p in pairs]
     edge = [p['edge_C'] for p in pairs]

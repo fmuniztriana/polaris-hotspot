@@ -50,7 +50,7 @@ These results validate the firmware-reported hotspot on the two recorded boards,
 
 [RX 580 data](evidence/) · [RX 550 data](evidence/rx550/)
 
-Each dataset includes register samples, a reduced reference CSV, matched pairs, comparison metrics, an analyzer and SHA-256 hashes. The reduced CSV preserves the original timestamp, edge, hotspot and activity values. Analysis uses the recorded clock offsets: UTC-02:00 for RX580 and UTC-03:00 for RX550.
+Each dataset includes register samples, a reduced reference CSV, matched pairs, comparison metrics, an analyzer and SHA-256 hashes. Reference timestamps are standardized to UTC; measured values and sample pairing are unchanged.
 
 ```sh
 python3 evidence/analyze.py
