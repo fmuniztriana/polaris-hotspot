@@ -19,6 +19,7 @@
 #include "polaris_devices.hpp"
 #include "BoardInfo.hpp"
 #include "polaris_memory_bios.hpp"
+#include "polaris_slt.hpp"
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 class Reader {
@@ -193,7 +194,10 @@ public:
                 double quality=qualityRaw*0.25/1023.0*100.0;
                 if(qualityRaw>0 && quality<=100.0){wchar_t text[32];swprintf_s(text,L"%.1f %%",quality);board.quality=text;}
             }
-            if(sid&&sid!=0x3FFFFFFFFFFFFULL&&words[14]!=0xFFFFFFFF){wchar_t text[64];swprintf_s(text,L"%013llX / %011llX",sid,extended);board.sid=text;}
+            if(sid&&sid!=0x3FFFFFFFFFFFFULL&&words[14]!=0xFFFFFFFF){
+                wchar_t text[64];swprintf_s(text,L"%013llX / %011llX",sid,extended);board.sid=text;
+                if(extended!=0x7FFFFFFFFFFULL){auto slt=polaris::sid_to_slt(sid,extended);board.slt.assign(slt.begin(),slt.end());}
+            }
             unsigned dev=identity>>16;bool small=(dev&0xFF00)==0x6900;bool mid=dev>=0x67E0&&dev<=0x67FF;
             unsigned engines=(small||mid)?2:4, perEngine=small?5:(mid?8:9),total=0;
             for(unsigned se=0;se<engines;se++){
@@ -203,7 +207,7 @@ public:
             }
             if(total){board.units=std::to_wstring(total)+L" CUs / "+std::to_wstring(total*64)+L" shaders";}
             restore();ReleaseMutex(mutex);
-        }catch(const std::exception& e){board.error=e.what();board.units=L"N/A";board.sid=L"N/A";board.quality=L"N/A";try{if(saved)restore();}catch(...){ReleaseMutex(mutex);throw;}ReleaseMutex(mutex);}
+        }catch(const std::exception& e){board.error=e.what();board.units=L"N/A";board.sid=L"N/A";board.slt=L"N/A";board.quality=L"N/A";try{if(saved)restore();}catch(...){ReleaseMutex(mutex);throw;}ReleaseMutex(mutex);}
     }
     DWORD read(DWORD offset) {
         check(offset==0x210 || offset==0x214 || offset==grbmIndex || offset==0x89BC || offset==0x89C0 || offset==0x1734,"Unexpected read offset");
@@ -284,8 +288,8 @@ static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
         SendMessageW(advancedButton,WM_SETFONT,reinterpret_cast<WPARAM>(detailsFont),TRUE);
         {
             const auto& b=reader->board;
-            std::wstring text=L"GPU name\r\n"+b.name+L"\r\n\r\nActive units   "+b.units+L"\r\nRevision         "+b.revision+L"\r\nASIC Quality  "+b.quality+L"\r\n\r\nMemory vendor   "+b.memoryVendor+L"\r\nMemory size        "+b.memorySize+L"\r\nMemory model\r\n"+b.memoryModel+L"\r\n\r\nVBIOS\r\n"+b.bios+L"\r\n\r\nSID (primary / extended)\r\n"+b.sid;
-            details=CreateWindowW(L"EDIT",text.c_str(),WS_CHILD|ES_MULTILINE|ES_READONLY,16,211,370,335,window,nullptr,nullptr,nullptr);
+            std::wstring text=L"GPU name\r\n"+b.name+L"\r\n\r\nActive units   "+b.units+L"\r\nRevision         "+b.revision+L"\r\nASIC Quality  "+b.quality+L"\r\n\r\nMemory vendor   "+b.memoryVendor+L"\r\nMemory size        "+b.memorySize+L"\r\nMemory model\r\n"+b.memoryModel+L"\r\n\r\nVBIOS\r\n"+b.bios+L"\r\n\r\nSLT   "+b.slt+L"\r\nSID (primary / extended)\r\n"+b.sid;
+            details=CreateWindowW(L"EDIT",text.c_str(),WS_CHILD|ES_MULTILINE|ES_READONLY,16,211,370,355,window,nullptr,nullptr,nullptr);
             SendMessageW(details,WM_SETFONT,reinterpret_cast<WPARAM>(detailsFont),TRUE);
         }
         SetTimer(window,1,1000,nullptr); PostMessageW(window,WM_APP,0,0); return 0;
@@ -293,7 +297,7 @@ static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
         if(LOWORD(w)==200){
             expanded=!expanded;SetWindowTextW(advancedButton,expanded?L"Advanced \x25B4":L"Advanced \x25BE");
             ShowWindow(details,expanded?SW_SHOW:SW_HIDE);
-            SetWindowPos(window,nullptr,0,0,expanded?420:296,expanded?600:247,SWP_NOMOVE|SWP_NOZORDER);
+            SetWindowPos(window,nullptr,0,0,expanded?420:296,expanded?620:247,SWP_NOMOVE|SWP_NOZORDER);
             int valueWidth=expanded?264:140,fullWidth=expanded?370:246;
             MoveWindow(coreLabel,122,16,valueWidth,34,TRUE);MoveWindow(valueLabel,122,60,valueWidth,34,TRUE);MoveWindow(deltaLabel,122,104,valueWidth,34,TRUE);
             MoveWindow(statusLabel,16,147,fullWidth,22,TRUE);MoveWindow(advancedButton,16,172,fullWidth,28,TRUE);
@@ -316,7 +320,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
         reader=std::make_unique<Reader>();
         try{reader->open();}catch(const std::exception& e){startupError=e.what();}
         if(logFile) { fprintf(logFile,"# pci=0x%08lX;identification_reads=%u\n",reader->identity,reader->board.acquisitions);fprintf(logFile,"# name=%ls;units=%ls;revision=%ls;vbios=%ls;sid=%ls\n",reader->board.name.c_str(),reader->board.units.c_str(),reader->board.revision.c_str(),reader->board.bios.c_str(),reader->board.sid.c_str());fprintf(logFile,"# asic_quality=%ls;quality_raw=%u\n",reader->board.quality.c_str(),reader->board.qualityRaw);fprintf(logFile,"uptime_ms,raw,hotspot_c,selector_restored,gpu_c,delta_c\n"); fflush(logFile); }
-        if(logFile){fprintf(logFile,"# memory_reads=%u;vendor=%ls;model=%ls;bytes=%llu;module=%u;memory_error=%s\n",reader->board.memoryAcquisitions,reader->board.memoryVendor.c_str(),reader->board.memoryModel.c_str(),reader->board.memoryBytes,reader->board.memoryModule,reader->board.memoryError.c_str());fflush(logFile);}
+        if(logFile){fprintf(logFile,"# slt=%ls\n",reader->board.slt.c_str());fprintf(logFile,"# memory_reads=%u;vendor=%ls;model=%ls;bytes=%llu;module=%u;memory_error=%s\n",reader->board.memoryAcquisitions,reader->board.memoryVendor.c_str(),reader->board.memoryModel.c_str(),reader->board.memoryBytes,reader->board.memoryModule,reader->board.memoryError.c_str());fflush(logFile);}
         WNDCLASSW cls{}; cls.lpfnWndProc=windowProc; cls.hInstance=instance; cls.lpszClassName=L"PolarisHotspotWindow"; cls.hCursor=LoadCursor(nullptr,IDC_ARROW); cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
         cls.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(101));
         check(RegisterClassW(&cls)!=0,"Window registration failed");

@@ -20,6 +20,8 @@ ASIC Quality uses the already-read factory word 14: `((word >> 4) & 0xFFF) * 0.2
 
 CU counts come from the hardware and user inactive-unit masks; shaders are active CUs × 64. SID and unit masks are read through RTCore, with access selectors restored. No fuse or unit-disable mask is programmed. Name comes from Windows device enumeration; VBIOS uses the installed driver's identification API once, because the registry can contain a placeholder. Thermal readings remain entirely through RTCore. The Windows name may describe a product family rather than an exact retail model, and SID is not a board serial number.
 
+SLT is converted once from the cached SIDs: primary bits 0–31 encode the lot in base 37 (space, A–Z, 0–9); primary bits 32–36 encode the wafer, bits 37–44 encode X, and extended bits 0–7 encode Y. The decimal numeric fields are appended with a minimum width of two digits. Both raw SIDs remain visible because SLT does not preserve all their bits. No extra hardware reads are made for this conversion.
+
 ## Register transport
 
 This application needs a compatible RTCore64 register-access driver. A kernel driver is not embedded or redistributed here. A driver already exposing `\\.\RTCore64` can be used directly; an incompatible interface causes a transport error, not a temperature reading.

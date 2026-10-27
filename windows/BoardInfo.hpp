@@ -8,6 +8,7 @@
 struct BoardInfo {
     std::wstring name=L"N/A", units=L"N/A", revision=L"N/A", bios=L"N/A", sid=L"N/A", quality=L"N/A";
     unsigned acquisitions=0;
+    std::wstring slt=L"N/A";
     unsigned qualityRaw=0;
     std::string error;
     std::wstring memoryVendor=L"N/A",memoryModel=L"N/A",memorySize=L"N/A";
