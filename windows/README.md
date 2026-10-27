@@ -8,7 +8,13 @@ All three values come from one RTCore register read: GPU is `CTF_TEMP` (bits 9�
 
 Windows 10/11 x64, administrator rights, and exactly one Polaris GPU are required. Polaris 10/11/12 IDs are accepted, including `67DF` used by RX470/480/570/580 variants, plus the tested `6FDF` and `699F` profiles. Other Polaris boards are allowed even without bench validation. Detection uses the Windows PCI location; no bench-specific address is compiled in.
 
-The panel distinguishes **Perfil testado** (a previously tested PCI/subsystem/revision profile) from **Perfil não testado**. This label does not block collection or certify every board sharing those IDs. A failed or invalid reading shows **N/A / Leitura indisponível**, with no stale temperatures. Unsupported families are not probed. The accepted IDs come from the [Linux Polaris PCI table](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c) and are listed in `include/polaris_devices.hpp`.
+The panel distinguishes **Tested profile** (a previously tested PCI/subsystem/revision profile) from **Untested profile**. This label does not block collection or certify every board sharing those IDs. A failed or invalid reading shows **N/A / Reading unavailable**, with no stale temperatures. Unsupported families are not probed. The accepted IDs come from the [Linux Polaris PCI table](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c) and are listed in `include/polaris_devices.hpp`.
+
+## Advanced identification
+
+**Advanced** is collapsed on startup. It shows the Windows GPU name, active CUs/shaders, PCI revision, VBIOS and raw primary/extended SID. Identification is read once before the temperature loop; opening or closing this section only displays cached data. Fields that cannot be read remain N/A.
+
+CU counts come from the hardware and user inactive-unit masks; shaders are active CUs × 64. SID and unit masks are read through RTCore, with access selectors restored. No fuse or unit-disable mask is programmed. Name comes from Windows device enumeration; VBIOS uses the installed driver's identification API once, because the registry can contain a placeholder. Thermal readings remain entirely through RTCore. The Windows name may describe a product family rather than an exact retail model, and SID is not a board serial number.
 
 ## Register transport
 

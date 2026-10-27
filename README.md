@@ -10,7 +10,9 @@ Minimal C++ recipe for reading the firmware-reported hotspot on AMD Polaris, val
 
 Both temperatures come from the same register read; delta is `Hotspot − GPU`. See [setup and build instructions](windows/README.md).
 
-Accepts Polaris 10/11/12, including RX 470/480/570/580 variants, even when the board profile has not been tested. The panel marks **Perfil não testado** without blocking readings. If acquisition fails, it shows **N/A / Leitura indisponível**. One Polaris GPU at a time; hardware validation remains limited to the recorded RX550/RX580 boards. The screenshot above illustrates the temperature layout; v0.1.3 also adds the profile status below it.
+Accepts Polaris 10/11/12, including RX 470/480/570/580 variants, even when the board profile has not been tested. The panel marks **Untested profile** without blocking readings. If acquisition fails, it shows **N/A / Reading unavailable**. One Polaris GPU at a time; hardware validation remains limited to the recorded RX550/RX580 boards.
+
+**Advanced** starts collapsed. Expand it to see GPU name, active CUs/shaders, revision, VBIOS and SID. Identification is read once at startup; expanding the panel does not query the GPU again. Missing fields show N/A.
 
 ## The entire recipe
 
