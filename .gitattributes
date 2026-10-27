@@ -1,3 +1,8 @@
 * text=auto
 evidence/* -text
 evidence/** -text
+
+# Auxiliary verification/build scripts remain available but do not count in language statistics.
+evidence/**/*.py linguist-detectable=false
+evidence/*.py linguist-detectable=false
+windows/build.cmd linguist-detectable=false
