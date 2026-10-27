@@ -4,7 +4,7 @@ Minimal C++ recipe for reading the firmware-reported hotspot on AMD Polaris, val
 
 ## Windows display
 
-[Download PolarisHotspot.exe](https://github.com/fmuniztriana/polaris-hotspot/releases/latest) for a small window showing only hotspot, refreshed once per second. See [setup and build instructions](windows/README.md). Administrator access and the documented compatible register-access driver are required; the driver is not bundled. The program does not start a workload.
+[Download PolarisHotspot.exe](https://github.com/fmuniztriana/polaris-hotspot/releases/latest) and run as administrator. It shows only hotspot, refreshed once per second, and automatically finds the compatible RTCore driver in your MSI Afterburner installation: no driver copying or opening Afterburner is needed. The driver is not bundled. See [setup and build instructions](windows/README.md).
 
 ## The entire recipe
 

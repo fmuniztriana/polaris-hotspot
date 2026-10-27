@@ -2,13 +2,17 @@
 
 `PolarisHotspot.exe` displays only the hotspot and updates once per second. Close the window to stop. It does not start a graphics workload or query memory temperatures.
 
+**Quick start:** with MSI Afterburner installed, download the executable and run it as administrator. The compatible driver is found automatically; no file copying is needed.
+
 Windows 10/11 x64, administrator rights, and exactly one supported PCI device (`1002:699F` or `1002:6FDF`) are required. Detection uses the Windows PCI location; no bench-specific address is compiled in. Other device IDs are deliberately not enabled without validation.
 
 ## Register transport
 
 This application needs a compatible RTCore64 register-access driver. A kernel driver is not embedded or redistributed here. A driver already exposing `\\.\RTCore64` can be used directly; an incompatible interface causes a transport error, not a temperature reading.
 
-Alternatively, place a lawfully obtained `RTCore64.sys` beside the executable. The supported file has SHA-256:
+If no driver is already available, the program searches for a compatible `RTCore64.sys` beside the executable, then in the MSI Afterburner installation recorded in the Windows uninstall registry (32-bit and 64-bit views), and finally in the standard Program Files locations. An existing Afterburner installation can therefore be used directly, without copying its driver or opening the Afterburner application. Custom installations are discovered through their registered installation/uninstall location.
+
+Each candidate is checked before loading. An incompatible candidate is skipped; if no supported file is found, the program displays an error. The supported file has SHA-256:
 
 ```text
 F1C8CA232789C2F11A511C8CD95A9F3830DD719CAD5AA22CB7C3539AB8CB4DC3
@@ -45,3 +49,5 @@ This validates the Windows collector at idle; the separate Linux evidence valida
 ![Minimal hotspot window on RX550](../evidence/windows-rx550/window.png)
 
 [Raw samples, executable hash and test summary](../evidence/windows-rx550/).
+
+**v0.1.1 discovery test:** RX550, 10 readings at 25 °C, median interval 1000 ms, 10/10 selector restorations, exit code 0. No adjacent driver file and no RTCore running before launch. The temporary service loaded the driver directly from the Afterburner installation and was removed on exit. Watchdog remained active; same boot and GPU error code 0.

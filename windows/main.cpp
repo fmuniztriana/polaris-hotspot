@@ -14,6 +14,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include "polaris_hotspot.hpp"
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
@@ -51,18 +52,64 @@ class Reader {
         check(matches==1,"Exactly one supported RX550/RX580 is required");
     }
     void openDevice() { device=CreateFileW(L"\\\\.\\RTCore64",GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,0,nullptr); }
-    void startDriver() {
-        wchar_t filename[MAX_PATH]{};
-        check(GetModuleFileNameW(nullptr,filename,MAX_PATH)>0,"Executable path unavailable");
-        std::wstring path=filename; path.resize(path.find_last_of(L"\\/")+1); path+=L"RTCore64.sys";
-        std::ifstream input(path,std::ios::binary);
-        check(bool(input),"Place the documented RTCore64.sys next to this EXE, or start a compatible driver first");
+    static std::wstring regString(HKEY key,const wchar_t* name) {
+        wchar_t value[32768]{}; DWORD bytes=sizeof value;
+        if(RegGetValueW(key,nullptr,name,RRF_RT_REG_SZ,nullptr,value,&bytes)!=ERROR_SUCCESS) return {};
+        return value;
+    }
+    static void addDirectory(std::vector<std::wstring>& paths,std::wstring folder) {
+        if(folder.empty()) return;
+        if(folder.back()!=L'\\' && folder.back()!=L'/') folder+=L'\\';
+        paths.push_back(folder+L"RTCore64.sys");
+    }
+    static std::vector<std::wstring> driverPaths() {
+        std::vector<std::wstring> paths; wchar_t filename[MAX_PATH]{};
+        DWORD length=GetModuleFileNameW(nullptr,filename,MAX_PATH);
+        check(length>0 && length<MAX_PATH,"Executable path unavailable");
+        std::wstring folder=filename; addDirectory(paths,folder.substr(0,folder.find_last_of(L"\\/")));
+        for(REGSAM view:{KEY_WOW64_32KEY,KEY_WOW64_64KEY}) {
+            HKEY root=nullptr;
+            if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",0,KEY_READ|view,&root)!=ERROR_SUCCESS) continue;
+            for(DWORD i=0;;++i) {
+                wchar_t name[256]{}; DWORD size=256;
+                LONG status=RegEnumKeyExW(root,i,name,&size,nullptr,nullptr,nullptr,nullptr);
+                if(status==ERROR_NO_MORE_ITEMS) break;
+                if(status!=ERROR_SUCCESS) continue;
+                HKEY key=nullptr; if(RegOpenKeyExW(root,name,0,KEY_READ|view,&key)!=ERROR_SUCCESS) continue;
+                if(regString(key,L"DisplayName").find(L"MSI Afterburner")==0) {
+                    addDirectory(paths,regString(key,L"InstallLocation"));
+                    auto command=regString(key,L"UninstallString");
+                    if(!command.empty()) {
+                        int argc=0; auto argv=CommandLineToArgvW(command.c_str(),&argc);
+                        if(argv && argc>0) { std::wstring exe=argv[0]; auto slash=exe.find_last_of(L"\\/"); if(slash!=std::wstring::npos) addDirectory(paths,exe.substr(0,slash)); }
+                        if(argv) LocalFree(argv);
+                    }
+                }
+                RegCloseKey(key);
+            }
+            RegCloseKey(root);
+        }
+        for(auto variable:{L"ProgramFiles(x86)",L"ProgramW6432",L"ProgramFiles"}) {
+            wchar_t value[MAX_PATH]{}; DWORD n=GetEnvironmentVariableW(variable,value,MAX_PATH);
+            if(n>0 && n<MAX_PATH) addDirectory(paths,std::wstring(value)+L"\\MSI Afterburner");
+        }
+        return paths;
+    }
+    static bool compatible(const std::wstring& path) {
+        std::ifstream input(path,std::ios::binary|std::ios::ate);
+        if(!input || input.tellg()<=0 || input.tellg()>1024*1024) return false;
+        input.seekg(0);
         std::string bytes((std::istreambuf_iterator<char>(input)),{});
-        check(!bytes.empty(),"Empty driver file");
+        if(bytes.empty()) return false;
         unsigned char digest[32]{};
-        check(BCryptHash(BCRYPT_SHA256_ALG_HANDLE,nullptr,0,reinterpret_cast<PUCHAR>(&bytes[0]),static_cast<ULONG>(bytes.size()),digest,32)==0,"Driver hash failed");
+        if(BCryptHash(BCRYPT_SHA256_ALG_HANDLE,nullptr,0,reinterpret_cast<PUCHAR>(&bytes[0]),static_cast<ULONG>(bytes.size()),digest,32)!=0) return false;
         const unsigned char expected[32]={0xf1,0xc8,0xca,0x23,0x27,0x89,0xc2,0xf1,0x1a,0x51,0x1c,0x8c,0xd9,0x5a,0x9f,0x38,0x30,0xdd,0x71,0x9c,0xad,0x5a,0xa2,0x2c,0xb7,0xc3,0x53,0x9a,0xb8,0xcb,0x4d,0xc3};
-        check(std::memcmp(digest,expected,32)==0,"Unsupported RTCore64.sys version");
+        return std::memcmp(digest,expected,32)==0;
+    }
+    void startDriver() {
+        std::wstring path;
+        for(const auto& candidate:driverPaths()) if(compatible(candidate)) { path=candidate; break; }
+        check(!path.empty(),"Compatible RTCore64.sys not found in MSI Afterburner or beside this EXE");
         manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CREATE_SERVICE);
         check(manager!=nullptr,"Administrator access required");
         service=CreateServiceW(manager,L"PolarisHotspotRTCore",L"Polaris Hotspot register access",SERVICE_START|SERVICE_STOP|DELETE|SERVICE_QUERY_STATUS,SERVICE_KERNEL_DRIVER,SERVICE_DEMAND_START,SERVICE_ERROR_NORMAL,path.c_str(),nullptr,nullptr,nullptr,nullptr,nullptr);
