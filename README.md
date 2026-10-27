@@ -12,7 +12,7 @@ Both temperatures come from the same register read; delta is `Hotspot − GPU`. 
 
 Accepts Polaris 10/11/12, including RX 470/480/570/580 variants, even when the board profile has not been tested. The panel marks **Untested profile** without blocking readings. If acquisition fails, it shows **N/A / Reading unavailable**. One Polaris GPU at a time; hardware validation remains limited to the recorded RX550/RX580 boards.
 
-**Advanced** starts collapsed. Expand it to see GPU name, active CUs/shaders, revision, ASIC Quality, VBIOS and SID. Identification is read once at startup; expanding the panel does not query the GPU again. Missing fields show N/A.
+**Advanced** starts collapsed. Expand it to see GPU name, active CUs/shaders, revision, ASIC Quality, memory vendor/model/capacity, VBIOS and SID. The memory model is explicitly marked **(VBIOS)**: it is the active BIOS profile's declaration, not an independently verified physical chip ID. Identification is read once at startup; expanding the panel does not query the GPU again. Missing fields show N/A.
 
 ## The entire recipe
 

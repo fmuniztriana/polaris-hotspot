@@ -18,6 +18,7 @@
 #include "polaris_hotspot.hpp"
 #include "polaris_devices.hpp"
 #include "BoardInfo.hpp"
+#include "polaris_memory_bios.hpp"
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 class Reader {
@@ -143,13 +144,35 @@ public:
         check(polaris::accepts_device(identity&0xFFFF,identity>>16) && (pci(4)&2),"GPU identity or memory decoding invalid");
         tested=polaris::tested_profile(identity>>16,pci(0x2c),pci(8)&0xFF);
         wchar_t rev[8];swprintf_s(rev,L"%02X",pci(8)&0xFF);board.revision=rev;
-        board.bios=biosFromDriver(adlPath,bus);
+        board.bios=biosFromDriver(adlPath,bus,board);
         DWORD bar=pci(0x24); check(bar && bar!=0xffffffff && (bar&15)==0,"Unsupported BAR5");
         std::uint64_t physical=bar; std::memcpy(mapping.data(),&physical,8);
         put(mapping.data(),16,0x40000); put(mapping.data(),32,bus); put(mapping.data(),36,slot); put(mapping.data(),40,function); put(mapping.data(),44,5);
         io(0x80002040,mapping.data(),48); mapped=true;
         mutex=CreateMutexW(nullptr,FALSE,L"Global\\Access_PCI"); check(mutex!=nullptr,"PCI mutex unavailable");
         identifyOnce();
+        identifyMemoryOnce();
+    }
+    void identifyMemoryOnce(){
+        check(board.memoryAcquisitions++==0,"Memory identification must run once");
+        DWORD wait=WaitForSingleObject(mutex,200);if(wait!=WAIT_OBJECT_0&&wait!=WAIT_ABANDONED){board.memoryError="PCI access busy";return;}
+        DWORD original=0,romIndex=0;bool selectorSaved=false,indexSaved=false;
+        auto restore=[&](){if(indexSaved){write(0x210,0xC0600010);check(read(0x210)==0xC0600010,"ROM selector mismatch");write(0x214,romIndex);check(read(0x214)==romIndex,"ROM index restore failed");}if(selectorSaved){write(0x210,original);check(read(0x210)==original,"ROM selector restore failed");}};
+        try{
+            board.memoryModule=(read(0x1734)>>16)&255;
+            original=read(0x210);check(original!=0xFFFFFFFF,"ROM selector unavailable");selectorSaved=true;
+            write(0x210,0xC0600010);check(read(0x210)==0xC0600010,"ROM selector mismatch");romIndex=read(0x214);check(romIndex!=0xFFFFFFFF,"ROM index unavailable");indexSaved=true;
+            write(0x214,0);write(0x210,0xC0600014);check(read(0x210)==0xC0600014,"ROM data selector mismatch");
+            std::vector<unsigned char> rom(65536);auto start=GetTickCount64();
+            for(size_t p=0;p<rom.size();p+=4){DWORD value=read(0x214);std::memcpy(rom.data()+p,&value,4);if(p==0)check((value&65535)==0xAA55,"ROM signature unavailable");if((p&1023)==0)check(GetTickCount64()-start<2000,"ROM read timed out");}
+            check(read(0x210)==0xC0600014,"ROM selector changed during read");
+            restore();selectorSaved=indexSaved=false;
+            auto module=polaris::memory_module(rom,board.memoryModule);
+            if(!module.part.empty())board.memoryModel=std::wstring(module.part.begin(),module.part.end())+L" (VBIOS)";
+            auto vendor=memoryVendorName(module.vendor);
+            if(board.memoryVendor==L"N/A" && vendor!=L"N/A")board.memoryVendor=vendor+L" (VBIOS)";
+            ReleaseMutex(mutex);
+        }catch(const std::exception& e){board.memoryError=e.what();try{restore();}catch(...){ReleaseMutex(mutex);throw;}ReleaseMutex(mutex);}
     }
     void identifyOnce(){
         check(board.acquisitions++==0,"Identification must run once");
@@ -183,11 +206,12 @@ public:
         }catch(const std::exception& e){board.error=e.what();board.units=L"N/A";board.sid=L"N/A";board.quality=L"N/A";try{if(saved)restore();}catch(...){ReleaseMutex(mutex);throw;}ReleaseMutex(mutex);}
     }
     DWORD read(DWORD offset) {
-        check(offset==0x210 || offset==0x214 || offset==grbmIndex || offset==0x89BC || offset==0x89C0,"Unexpected read offset");
+        check(offset==0x210 || offset==0x214 || offset==grbmIndex || offset==0x89BC || offset==0x89C0 || offset==0x1734,"Unexpected read offset");
         auto b=mapping; put(b.data(),20,offset); put(b.data(),24,4); io(0x80002048,b.data(),48); return get(b.data(),28);
     }
     void write(DWORD offset,DWORD value) {
-        check(offset==0x210 || offset==grbmIndex,"Only register selectors may be written");
+        check(offset==0x210 || offset==grbmIndex || offset==0x214,"Only register selectors may be written");
+        if(offset==0x214)check(read(0x210)==0xC0600010,"Only ROM read index may be written");
         auto b=mapping; put(b.data(),20,offset); put(b.data(),24,4); put(b.data(),28,value); io(0x8000204c,b.data(),48);
     }
     DWORD sample() {
@@ -260,8 +284,8 @@ static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
         SendMessageW(advancedButton,WM_SETFONT,reinterpret_cast<WPARAM>(detailsFont),TRUE);
         {
             const auto& b=reader->board;
-            std::wstring text=L"GPU name\r\n"+b.name+L"\r\n\r\nActive units   "+b.units+L"\r\nRevision         "+b.revision+L"\r\nASIC Quality  "+b.quality+L"\r\n\r\nVBIOS\r\n"+b.bios+L"\r\n\r\nSID (primary / extended)\r\n"+b.sid;
-            details=CreateWindowW(L"EDIT",text.c_str(),WS_CHILD|ES_MULTILINE|ES_READONLY,16,211,370,245,window,nullptr,nullptr,nullptr);
+            std::wstring text=L"GPU name\r\n"+b.name+L"\r\n\r\nActive units   "+b.units+L"\r\nRevision         "+b.revision+L"\r\nASIC Quality  "+b.quality+L"\r\n\r\nMemory vendor   "+b.memoryVendor+L"\r\nMemory size        "+b.memorySize+L"\r\nMemory model\r\n"+b.memoryModel+L"\r\n\r\nVBIOS\r\n"+b.bios+L"\r\n\r\nSID (primary / extended)\r\n"+b.sid;
+            details=CreateWindowW(L"EDIT",text.c_str(),WS_CHILD|ES_MULTILINE|ES_READONLY,16,211,370,335,window,nullptr,nullptr,nullptr);
             SendMessageW(details,WM_SETFONT,reinterpret_cast<WPARAM>(detailsFont),TRUE);
         }
         SetTimer(window,1,1000,nullptr); PostMessageW(window,WM_APP,0,0); return 0;
@@ -269,7 +293,7 @@ static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
         if(LOWORD(w)==200){
             expanded=!expanded;SetWindowTextW(advancedButton,expanded?L"Advanced \x25B4":L"Advanced \x25BE");
             ShowWindow(details,expanded?SW_SHOW:SW_HIDE);
-            SetWindowPos(window,nullptr,0,0,expanded?420:296,expanded?510:247,SWP_NOMOVE|SWP_NOZORDER);
+            SetWindowPos(window,nullptr,0,0,expanded?420:296,expanded?600:247,SWP_NOMOVE|SWP_NOZORDER);
             int valueWidth=expanded?264:140,fullWidth=expanded?370:246;
             MoveWindow(coreLabel,122,16,valueWidth,34,TRUE);MoveWindow(valueLabel,122,60,valueWidth,34,TRUE);MoveWindow(deltaLabel,122,104,valueWidth,34,TRUE);
             MoveWindow(statusLabel,16,147,fullWidth,22,TRUE);MoveWindow(advancedButton,16,172,fullWidth,28,TRUE);
@@ -292,6 +316,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
         reader=std::make_unique<Reader>();
         try{reader->open();}catch(const std::exception& e){startupError=e.what();}
         if(logFile) { fprintf(logFile,"# pci=0x%08lX;identification_reads=%u\n",reader->identity,reader->board.acquisitions);fprintf(logFile,"# name=%ls;units=%ls;revision=%ls;vbios=%ls;sid=%ls\n",reader->board.name.c_str(),reader->board.units.c_str(),reader->board.revision.c_str(),reader->board.bios.c_str(),reader->board.sid.c_str());fprintf(logFile,"# asic_quality=%ls;quality_raw=%u\n",reader->board.quality.c_str(),reader->board.qualityRaw);fprintf(logFile,"uptime_ms,raw,hotspot_c,selector_restored,gpu_c,delta_c\n"); fflush(logFile); }
+        if(logFile){fprintf(logFile,"# memory_reads=%u;vendor=%ls;model=%ls;bytes=%llu;module=%u;memory_error=%s\n",reader->board.memoryAcquisitions,reader->board.memoryVendor.c_str(),reader->board.memoryModel.c_str(),reader->board.memoryBytes,reader->board.memoryModule,reader->board.memoryError.c_str());fflush(logFile);}
         WNDCLASSW cls{}; cls.lpfnWndProc=windowProc; cls.hInstance=instance; cls.lpszClassName=L"PolarisHotspotWindow"; cls.hCursor=LoadCursor(nullptr,IDC_ARROW); cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
         cls.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(101));
         check(RegisterClassW(&cls)!=0,"Window registration failed");

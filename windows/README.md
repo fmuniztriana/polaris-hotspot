@@ -14,6 +14,8 @@ The panel distinguishes **Tested profile** (a previously tested PCI/subsystem/re
 
 **Advanced** is collapsed on startup. It shows the Windows GPU name, active CUs/shaders, PCI revision, ASIC Quality, VBIOS and raw primary/extended SID. Identification is read once before the temperature loop; opening or closing this section only displays cached data. Fields that cannot be read remain N/A.
 
+Memory vendor and capacity are queried from the installed driver's identification API once at startup. Memory model is read from the active ATOM VBIOS memory module and explicitly marked **(VBIOS)**; this is the BIOS declaration, not a physical per-chip ID. The ROM read uses the coordinated SMU window, preserves both selectors and does not issue DRAM mode commands or program the ROM. Unsupported table formats or inconsistent reads leave the model as N/A. The panel caches all three fields.
+
 ASIC Quality uses the already-read factory word 14: `((word >> 4) & 0xFFF) * 0.25 / 1023 * 100`, displayed to one decimal place. No additional hardware reads are needed. This is the factory quality indicator, not a health test or a guarantee of overclocking performance.
 
 CU counts come from the hardware and user inactive-unit masks; shaders are active CUs × 64. SID and unit masks are read through RTCore, with access selectors restored. No fuse or unit-disable mask is programmed. Name comes from Windows device enumeration; VBIOS uses the installed driver's identification API once, because the registry can contain a placeholder. Thermal readings remain entirely through RTCore. The Windows name may describe a product family rather than an exact retail model, and SID is not a board serial number.
