@@ -10,6 +10,8 @@ Windows 10/11 x64, administrator rights, and exactly one Polaris GPU are require
 
 The panel distinguishes **Tested profile** (a previously tested PCI/subsystem/revision profile) from **Untested profile**. This label does not block collection or certify every board sharing those IDs. A failed or invalid reading shows **N/A** and the cause, with no stale temperatures. Unsupported families are not probed. The accepted IDs come from the [Linux Polaris PCI table](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c) and are listed in `include/polaris_devices.hpp`.
 
+**Validated variants:** RX580 2048SP (32 CUs / 2048 shaders) and RX550/Lexa (8 CUs / 512 shaders). The full RX580 (36 CUs / 2304 shaders) is accepted but has not been physically validated in the recorded tests.
+
 ## Advanced identification
 
 **Advanced** is collapsed on startup. It shows the Windows GPU name, active CUs/shaders, PCI revision, ASIC Quality, VBIOS and raw primary/extended SID. Identification is read once when PCI access first becomes available; temporary contention at startup is retried on the next one-second tick. Opening or closing this section only displays cached data. Fields that cannot be read remain N/A.
