@@ -2,17 +2,17 @@
 
 `PolarisHotspot.exe` displays GPU temperature, hotspot and their delta once per second. Close the window to stop. It does not start a graphics workload or query memory temperatures.
 
-All three values come from one RTCore register read: GPU is `CTF_TEMP` (bits 9–17), hotspot is `ASIC_MAX_TEMP` (bits 0–8), and delta is hotspot minus GPU. Both temperatures use whole degrees Celsius; GPU is the SMU7 temperature field used by the Linux driver, not a fractional or averaged reading from a monitoring API. No ADL dependency is added.
+All three values come from one RTCore register read: GPU is `CTF_TEMP` (bits 9–17), hotspot is `ASIC_MAX_TEMP` (bits 0–8), and delta is hotspot minus GPU. Both temperatures use whole degrees Celsius; GPU is the SMU7 temperature field used by the Linux driver, not a fractional or averaged reading from a monitoring API. Temperature collection does not use ADL; Advanced optionally uses the installed driver's ADL library for VBIOS and memory identification.
 
 **Quick start:** with MSI Afterburner installed, download the executable and run it as administrator. The compatible driver is found automatically; no file copying is needed.
 
 Windows 10/11 x64, administrator rights, and exactly one Polaris GPU are required. Polaris 10/11/12 IDs are accepted, including `67DF` used by RX470/480/570/580 variants, plus the tested `6FDF` and `699F` profiles. Other Polaris boards are allowed even without bench validation. Detection uses the Windows PCI location; no bench-specific address is compiled in.
 
-The panel distinguishes **Tested profile** (a previously tested PCI/subsystem/revision profile) from **Untested profile**. This label does not block collection or certify every board sharing those IDs. A failed or invalid reading shows **N/A / Reading unavailable**, with no stale temperatures. Unsupported families are not probed. The accepted IDs come from the [Linux Polaris PCI table](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c) and are listed in `include/polaris_devices.hpp`.
+The panel distinguishes **Tested profile** (a previously tested PCI/subsystem/revision profile) from **Untested profile**. This label does not block collection or certify every board sharing those IDs. A failed or invalid reading shows **N/A** and the cause, with no stale temperatures. Unsupported families are not probed. The accepted IDs come from the [Linux Polaris PCI table](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c) and are listed in `include/polaris_devices.hpp`.
 
 ## Advanced identification
 
-**Advanced** is collapsed on startup. It shows the Windows GPU name, active CUs/shaders, PCI revision, ASIC Quality, VBIOS and raw primary/extended SID. Identification is read once before the temperature loop; opening or closing this section only displays cached data. Fields that cannot be read remain N/A.
+**Advanced** is collapsed on startup. It shows the Windows GPU name, active CUs/shaders, PCI revision, ASIC Quality, VBIOS and raw primary/extended SID. Identification is read once when PCI access first becomes available; temporary contention at startup is retried on the next one-second tick. Opening or closing this section only displays cached data. Fields that cannot be read remain N/A.
 
 Memory vendor and capacity are queried from the installed driver's identification API once at startup. Memory model is read from the active ATOM VBIOS memory module and explicitly marked **(VBIOS)**; this is the BIOS declaration, not a physical per-chip ID. The ROM read uses the coordinated SMU window, preserves both selectors and does not issue DRAM mode commands or program the ROM. Unsupported table formats or inconsistent reads leave the model as N/A. The panel caches all three fields.
 
@@ -37,7 +37,9 @@ A4F44E267698D47F6A905E96B356582B4EE9CF4049E8C792FFDA1B7356E68D35
 
 The program checks the hash before starting its temporary `PolarisHotspotRTCore` service. A hidden copy of the same executable watches the reader and requests the stop and removal of the service it created, including when the reader process is forcibly terminated. If another client has the driver open, Windows keeps it available until that client closes it, then completes the removal. A driver already running is reused and left alone. Only one reader instance is allowed while its cleanup is pending. If the reader and helper are both forcibly terminated, the helper cannot clean up; the service may remain loaded. Windows must permit loading the driver; the application does not change security settings. If cleanup fails, details are written to `%TEMP%\PolarisHotspot-cleanup.log`.
 
-The collector coordinates indirect SMU access with `Global\Access_PCI`, validates selection/restoration, and writes only the SMU selector. Other monitors and drivers may not honor this mutex; simultaneous monitoring is not universally validated. A failed read stops acquisition and displays an error instead of retaining a stale temperature.
+The temperature loop coordinates indirect SMU access with `Global\Access_PCI`, validates selection/restoration, and writes only the SMU selector. Startup identification also temporarily changes the CU selector and ROM read index, restoring their saved values. Other monitors and drivers may not honor this mutex; simultaneous monitoring is not universally validated.
+
+If PCI access is busy for 200 ms, the panel shows **N/A / PCI access busy; retrying** and tries again on the next one-second tick. It never displays stale temperatures. Transport, invalid-value and selector/restoration failures stop collection and show the cause in the panel. Error text can be selected and copied, or scrolled with the keyboard if it exceeds the visible area; close and reopen after resolving the cause. Optional logs record skipped attempts as `BUSY` and fatal failures as `ERROR`. The `--samples` limit counts successful readings, not busy attempts.
 
 ## Build
 

@@ -23,6 +23,7 @@
 #include "ServiceGuard.hpp"
 
 static void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
+struct PciBusy : std::runtime_error { PciBusy():std::runtime_error("PCI access busy; retrying"){} };
 class Reader {
     static constexpr DWORD grbmIndex=0xC200u*4; // Register index -> BAR5 byte offset.
     HANDLE device = INVALID_HANDLE_VALUE, mutex = nullptr;
@@ -136,12 +137,12 @@ public:
         put(mapping.data(),16,0x40000); put(mapping.data(),32,bus); put(mapping.data(),36,slot); put(mapping.data(),40,function); put(mapping.data(),44,5);
         io(0x80002040,mapping.data(),48); mapped=true;
         mutex=CreateMutexW(nullptr,FALSE,L"Global\\Access_PCI"); check(mutex!=nullptr,"PCI mutex unavailable");
-        identifyOnce();
-        identifyMemoryOnce();
     }
     void identifyMemoryOnce(){
+        DWORD wait=WaitForSingleObject(mutex,200);
+        if(wait==WAIT_TIMEOUT)throw PciBusy();
+        check(wait==WAIT_OBJECT_0||wait==WAIT_ABANDONED,"PCI mutex wait failed");
         check(board.memoryAcquisitions++==0,"Memory identification must run once");
-        DWORD wait=WaitForSingleObject(mutex,200);if(wait!=WAIT_OBJECT_0&&wait!=WAIT_ABANDONED){board.memoryError="PCI access busy";return;}
         DWORD original=0,romIndex=0;bool selectorSaved=false,indexSaved=false;
         auto restore=[&](){if(indexSaved){write(0x210,0xC0600010);check(read(0x210)==0xC0600010,"ROM selector mismatch");write(0x214,romIndex);check(read(0x214)==romIndex,"ROM index restore failed");}if(selectorSaved){write(0x210,original);check(read(0x210)==original,"ROM selector restore failed");}};
         try{
@@ -161,8 +162,10 @@ public:
         }catch(const std::exception& e){board.memoryError=e.what();try{restore();}catch(...){ReleaseMutex(mutex);throw;}ReleaseMutex(mutex);}
     }
     void identifyOnce(){
+        DWORD wait=WaitForSingleObject(mutex,200);
+        if(wait==WAIT_TIMEOUT)throw PciBusy();
+        check(wait==WAIT_OBJECT_0||wait==WAIT_ABANDONED,"PCI mutex wait failed");
         check(board.acquisitions++==0,"Identification must run once");
-        DWORD wait=WaitForSingleObject(mutex,200);check(wait==WAIT_OBJECT_0||wait==WAIT_ABANDONED,"PCI access busy");
         DWORD smu=0,grbm=0;bool saved=false;
         auto restore=[&](){write(grbmIndex,grbm);write(0x210,smu);check(read(grbmIndex)==grbm&&read(0x210)==smu,"Identification selector restoration failed");};
         try{
@@ -204,8 +207,11 @@ public:
         auto b=mapping; put(b.data(),20,offset); put(b.data(),24,4); put(b.data(),28,value); io(0x8000204c,b.data(),48);
     }
     DWORD sample() {
+        if(!board.acquisitions)identifyOnce();
+        if(!board.memoryAcquisitions)identifyMemoryOnce();
         DWORD wait=WaitForSingleObject(mutex,200);
-        check(wait==WAIT_OBJECT_0 || wait==WAIT_ABANDONED,"PCI access busy");
+        if(wait==WAIT_TIMEOUT) throw PciBusy();
+        check(wait==WAIT_OBJECT_0 || wait==WAIT_ABANDONED,"PCI mutex wait failed");
         try {
             auto raw=polaris::read_thermal_word([this](DWORD p){return read(p);},[this](DWORD p,DWORD v){write(p,v);});
             check(polaris::decode_hotspot(raw)>0 && polaris::decode_hotspot(raw)<=150,"Invalid hotspot value");
@@ -230,10 +236,20 @@ static HFONT font;
 static FILE* logFile=nullptr;
 static unsigned sampleLimit=0, samples=0;
 static int result=0;
+static void refreshDetails() {
+            const auto& b=reader->board;
+            std::wstring text=L"GPU name\r\n"+b.name+L"\r\n\r\nActive units   "+b.units+L"\r\nRevision         "+b.revision+L"\r\nASIC Quality  "+b.quality+L"\r\n\r\nMemory vendor   "+b.memoryVendor+L"\r\nMemory size        "+b.memorySize+L"\r\nMemory model\r\n"+b.memoryModel+L"\r\n\r\nVBIOS\r\n"+b.bios+L"\r\n\r\nSLT   "+b.slt+L"\r\nSID (primary / extended)\r\n"+b.sid;
+    SetWindowTextW(details,text.c_str());
+}
+static void logIdentityOnce() {
+    static bool done=false;if(done)return;done=true;
+        if(logFile) { fprintf(logFile,"# pci=0x%08lX;identification_reads=%u\n",reader->identity,reader->board.acquisitions);fprintf(logFile,"# name=%ls;units=%ls;revision=%ls;vbios=%ls;sid=%ls\n",reader->board.name.c_str(),reader->board.units.c_str(),reader->board.revision.c_str(),reader->board.bios.c_str(),reader->board.sid.c_str());fprintf(logFile,"# asic_quality=%ls;quality_raw=%u\n",reader->board.quality.c_str(),reader->board.qualityRaw);fprintf(logFile,"uptime_ms,raw,hotspot_c,selector_restored,gpu_c,delta_c\n"); fflush(logFile); }
+        if(logFile){fprintf(logFile,"# slt=%ls\n",reader->board.slt.c_str());fprintf(logFile,"# memory_reads=%u;vendor=%ls;model=%ls;bytes=%llu;module=%u;memory_error=%s\n",reader->board.memoryAcquisitions,reader->board.memoryVendor.c_str(),reader->board.memoryModel.c_str(),reader->board.memoryBytes,reader->board.memoryModule,reader->board.memoryError.c_str());fflush(logFile);}
+}
 static void acquire(HWND window) {
     try {
         if(!startupError.empty()) throw std::runtime_error(startupError);
-        DWORD raw=reader->sample(); unsigned temp=polaris::decode_hotspot(raw);
+        DWORD raw=reader->sample(); refreshDetails(); logIdentityOnce(); unsigned temp=polaris::decode_hotspot(raw);
         unsigned core=(raw>>9)&0x1FFu;
         check(core>0 && core<=150,"Invalid GPU temperature");
         int delta=static_cast<int>(temp)-static_cast<int>(core);
@@ -243,9 +259,13 @@ static void acquire(HWND window) {
         SetWindowTextW(statusLabel,reader->tested?L"Tested profile":L"Untested profile");
         if(logFile) { fprintf(logFile,"%llu,0x%08lX,%u,true,%u,%d\n",GetTickCount64(),raw,temp,core,delta);fflush(logFile); }
         if(sampleLimit && ++samples>=sampleLimit) DestroyWindow(window);
+    } catch(const PciBusy& e) {
+        SetWindowTextW(valueLabel,L"N/A");SetWindowTextW(coreLabel,L"N/A");SetWindowTextW(deltaLabel,L"N/A");
+        SetWindowTextW(statusLabel,L"PCI access busy; retrying");
+        if(logFile) { fprintf(logFile,"BUSY,%llu,%s\n",GetTickCount64(),e.what()); fflush(logFile); }
     } catch(const std::exception& e) {
         KillTimer(window,1); SetWindowTextW(valueLabel,L"N/A");SetWindowTextW(coreLabel,L"N/A");SetWindowTextW(deltaLabel,L"N/A"); result=1;
-        SetWindowTextW(statusLabel,L"Reading unavailable");
+        SetWindowTextA(statusLabel,e.what());
         if(logFile) { fprintf(logFile,"ERROR,%s\n",e.what()); fflush(logFile); }
         if(sampleLimit) DestroyWindow(window);
     }
@@ -265,14 +285,12 @@ static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
         SendMessageW(coreLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
         SendMessageW(valueLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
         SendMessageW(deltaLabel,WM_SETFONT,reinterpret_cast<WPARAM>(font),TRUE);
-        statusLabel=CreateWindowW(L"STATIC",L"",WS_CHILD|WS_VISIBLE|SS_CENTER,16,147,246,22,window,nullptr,nullptr,nullptr);
-        advancedButton=CreateWindowW(L"BUTTON",L"Advanced \x25BE",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_FLAT,16,172,246,28,window,reinterpret_cast<HMENU>(200),nullptr,nullptr);
+        statusLabel=CreateWindowW(L"EDIT",L"",WS_CHILD|WS_VISIBLE|ES_MULTILINE|ES_READONLY|ES_AUTOVSCROLL|ES_CENTER,16,147,246,44,window,nullptr,nullptr,nullptr);
+        advancedButton=CreateWindowW(L"BUTTON",L"Advanced \x25BE",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_FLAT,16,194,246,28,window,reinterpret_cast<HMENU>(200),nullptr,nullptr);
         detailsFont=CreateFontW(-14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
         SendMessageW(advancedButton,WM_SETFONT,reinterpret_cast<WPARAM>(detailsFont),TRUE);
         {
-            const auto& b=reader->board;
-            std::wstring text=L"GPU name\r\n"+b.name+L"\r\n\r\nActive units   "+b.units+L"\r\nRevision         "+b.revision+L"\r\nASIC Quality  "+b.quality+L"\r\n\r\nMemory vendor   "+b.memoryVendor+L"\r\nMemory size        "+b.memorySize+L"\r\nMemory model\r\n"+b.memoryModel+L"\r\n\r\nVBIOS\r\n"+b.bios+L"\r\n\r\nSLT   "+b.slt+L"\r\nSID (primary / extended)\r\n"+b.sid;
-            details=CreateWindowW(L"EDIT",text.c_str(),WS_CHILD|ES_MULTILINE|ES_READONLY,16,211,370,355,window,nullptr,nullptr,nullptr);
+            details=CreateWindowW(L"EDIT",L"",WS_CHILD|ES_MULTILINE|ES_READONLY,16,233,370,355,window,nullptr,nullptr,nullptr);
             SendMessageW(details,WM_SETFONT,reinterpret_cast<WPARAM>(detailsFont),TRUE);
         }
         SetTimer(window,1,1000,nullptr); PostMessageW(window,WM_APP,0,0); return 0;
@@ -280,10 +298,10 @@ static LRESULT CALLBACK windowProc(HWND window,UINT message,WPARAM w,LPARAM l) {
         if(LOWORD(w)==200){
             expanded=!expanded;SetWindowTextW(advancedButton,expanded?L"Advanced \x25B4":L"Advanced \x25BE");
             ShowWindow(details,expanded?SW_SHOW:SW_HIDE);
-            SetWindowPos(window,nullptr,0,0,expanded?420:296,expanded?620:247,SWP_NOMOVE|SWP_NOZORDER);
+            SetWindowPos(window,nullptr,0,0,expanded?420:296,expanded?642:269,SWP_NOMOVE|SWP_NOZORDER);
             int valueWidth=expanded?264:140,fullWidth=expanded?370:246;
             MoveWindow(coreLabel,122,16,valueWidth,34,TRUE);MoveWindow(valueLabel,122,60,valueWidth,34,TRUE);MoveWindow(deltaLabel,122,104,valueWidth,34,TRUE);
-            MoveWindow(statusLabel,16,147,fullWidth,22,TRUE);MoveWindow(advancedButton,16,172,fullWidth,28,TRUE);
+            MoveWindow(statusLabel,16,147,fullWidth,44,TRUE);MoveWindow(advancedButton,16,194,fullWidth,28,TRUE);
             InvalidateRect(window,nullptr,TRUE);return 0;
         }break;
     case WM_TIMER: case WM_APP: acquire(window); return 0;
@@ -312,12 +330,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show) {
         if(GetLastError()==ERROR_ALREADY_EXISTS){CloseHandle(lifecycleGate);lifecycleGate=nullptr;throw std::runtime_error("Polaris Hotspot is already running or finishing cleanup");}
         reader=std::make_unique<Reader>();
         try{reader->open(lifecycleGate);}catch(const std::exception& e){startupError=e.what();}
-        if(logFile) { fprintf(logFile,"# pci=0x%08lX;identification_reads=%u\n",reader->identity,reader->board.acquisitions);fprintf(logFile,"# name=%ls;units=%ls;revision=%ls;vbios=%ls;sid=%ls\n",reader->board.name.c_str(),reader->board.units.c_str(),reader->board.revision.c_str(),reader->board.bios.c_str(),reader->board.sid.c_str());fprintf(logFile,"# asic_quality=%ls;quality_raw=%u\n",reader->board.quality.c_str(),reader->board.qualityRaw);fprintf(logFile,"uptime_ms,raw,hotspot_c,selector_restored,gpu_c,delta_c\n"); fflush(logFile); }
-        if(logFile){fprintf(logFile,"# slt=%ls\n",reader->board.slt.c_str());fprintf(logFile,"# memory_reads=%u;vendor=%ls;model=%ls;bytes=%llu;module=%u;memory_error=%s\n",reader->board.memoryAcquisitions,reader->board.memoryVendor.c_str(),reader->board.memoryModel.c_str(),reader->board.memoryBytes,reader->board.memoryModule,reader->board.memoryError.c_str());fflush(logFile);}
         WNDCLASSW cls{}; cls.lpfnWndProc=windowProc; cls.hInstance=instance; cls.lpszClassName=L"PolarisHotspotWindow"; cls.hCursor=LoadCursor(nullptr,IDC_ARROW); cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
         cls.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(101));
         check(RegisterClassW(&cls)!=0,"Window registration failed");
-        HWND window=CreateWindowW(cls.lpszClassName,L"Polaris Hotspot",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,296,247,nullptr,nullptr,instance,nullptr);
+        HWND window=CreateWindowW(cls.lpszClassName,L"Polaris Hotspot",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,CW_USEDEFAULT,CW_USEDEFAULT,296,269,nullptr,nullptr,instance,nullptr);
         check(window!=nullptr,"Window creation failed");
         HICON smallIcon=static_cast<HICON>(LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED));
         SendMessageW(window,WM_SETICON,ICON_SMALL,reinterpret_cast<LPARAM>(smallIcon));
