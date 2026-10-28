@@ -53,24 +53,16 @@ windows\build.cmd
 
 Output: `build\PolarisHotspot.exe`. The C++ runtime is linked statically. The executable requests elevation on launch.
 
-For a bounded validation run, optional arguments record raw readings and stop automatically:
+To stop after a specified number of successful readings and save a log:
 
 ```bat
 PolarisHotspot.exe --samples 30 --log new-samples.csv
 ```
 
-The log file must not already exist. Each successful row records monotonic uptime, raw register value, hotspot and confirmed selector restoration. These options do not add anything to the normal window.
+The log file must not already exist. Busy attempts do not count toward the sample limit, so this is not a wall-clock timeout. Each successful row records monotonic uptime, raw register value, hotspot and confirmed selector restoration. These options do not add anything to the normal window.
 
-## RX550 validation
+## Validation
 
-Tested on 2026-10-27 with RX550 `1002:699F`, revision C7, subsystem `1002:0B04`, Windows 10 Pro x64, display driver `31.0.12027.9001`. One visible 30-sample run at idle reported 25–26 °C; all 30 selector restorations passed. Median interval 1000 ms (984–1000 ms), sample span 28.984 seconds. Exit code 0, same boot, GPU error code 0, hardware watchdog running, no new display-recovery or WHEA events. The temporary driver service was removed on exit.
+Validated on RX550/Lexa and RX580 2048SP. The latter includes short tests with startup contention, Afterburner, HWiNFO sensors and both monitors under graphics load, plus normal and forced reader closure. These tests do not guarantee compatibility with every monitoring configuration.
 
-This validates the Windows collector at idle; the separate Linux evidence validates the register against reference telemetry under load. It is not a new Windows load test or validation of concurrent third-party monitoring.
-
-![GPU, hotspot and delta on RX550 under load](assets/panel.png)
-
-[Raw samples, executable hash and test summary](../evidence/windows-rx550/).
-
-**v0.1.1 discovery test:** RX550, 10 readings at 25 °C, median interval 1000 ms, 10/10 selector restorations, exit code 0. No adjacent driver file and no RTCore running before launch. The temporary service loaded the driver directly from the Afterburner installation and was removed on exit. Watchdog remained active; same boot and GPU error code 0.
-
-**v0.1.2:** adds GPU temperature, signed delta and the Polaris icon. Both temperatures come from the same register. The icon build completed 10 readings with correct deltas and selector restoration on RX550, exit code 0. A preceding test of this collector under graphics load recorded 60 samples, reaching GPU 46 °C, hotspot 54 °C and a maximum delta of 10 °C; the supervisor did not save its final summary, so those readings are not presented as a full benchmark pass.
+[Detailed validation records](../docs/validation.md) � [RX550 Windows evidence](../evidence/windows-rx550/)

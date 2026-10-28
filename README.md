@@ -1,85 +1,59 @@
-# Polaris hotspot
+# Polaris Hotspot
 
-Minimal C++ recipe for reading the firmware-reported hotspot on AMD Polaris, validated under load on an RX580 2048SP and an RX 550 (Lexa).
+Minimal C++ reader for GPU temperature and hotspot on AMD Polaris, validated under load on **RX580 2048SP** and **RX550 / Lexa**.
 
-## Windows display
+## Windows app
 
-[Download PolarisHotspot.exe](https://github.com/fmuniztriana/polaris-hotspot/releases/latest) and run as administrator with MSI Afterburner installed. It shows **GPU, Hotspot and Delta**, updated every second, and finds the compatible RTCore driver automatically. No copying files or opening Afterburner is needed.
+[Download PolarisHotspot.exe](https://github.com/fmuniztriana/polaris-hotspot/releases/latest/download/PolarisHotspot.exe) and run as administrator with MSI Afterburner installed. Requires Windows 10/11 x64 and exactly one Polaris GPU.
 
-The validated RTCore files from Afterburner **4.6.5, 4.6.6 and 4.6.7 Beta 2** are accepted. The reader cleans up its own temporary driver service when it closes; an already-running driver is left alone.
+The app shows **GPU, Hotspot and Delta** every second. It finds the compatible RTCore driver automatically; Afterburner does not need to be open. Verified driver files from Afterburner **4.6.5, 4.6.6 and 4.6.7 Beta 2** are supported.
 
-![Polaris Hotspot panel](windows/assets/panel.png)
+![RX580 2048SP under load, Advanced collapsed](windows/assets/panel.png)
 
-Both temperatures come from the same register read; delta is `Hotspot − GPU`. See [setup and build instructions](windows/README.md).
+**Advanced** shows cached GPU identification, active CUs/shaders, revision, ASIC Quality, memory vendor/model/capacity, VBIOS, SLT and raw SIDs. The memory model is marked **(VBIOS)** because it comes from the BIOS profile. Missing fields show N/A.
 
-Accepts Polaris 10/11/12, including RX 470/480/570/580 variants, even when the board profile has not been tested. The panel marks **Untested profile** without blocking readings. Busy PCI access is retried on the next one-second tick. Other acquisition failures show **N/A** and the cause in the panel. One Polaris GPU at a time; hardware validation remains limited to the recorded RX550/Lexa and RX580 2048SP variants.
+Busy PCI access is retried on the next second, including during startup. Other acquisition errors show N/A and the cause. The reader cleans up its own temporary service on exit and leaves a previously running driver alone.
 
-**Advanced** starts collapsed. Expand it to see GPU name, active CUs/shaders, revision, ASIC Quality, memory vendor/model/capacity, VBIOS, SLT and both raw SIDs. SLT is converted once from the cached SIDs, without extra GPU reads; the raw values remain available. The memory model is explicitly marked **(VBIOS)**: it is the active BIOS profile's declaration, not an independently verified physical chip ID. Identification is read once when PCI access becomes available; expanding the panel does not query the GPU again. Missing fields show N/A.
+[Windows instructions, driver details and build steps](windows/README.md)
 
-## The entire recipe
+## Supported and validated variants
 
-SMU register **`CG_MULT_THERMAL_STATUS = 0xC0300014`**, field **`ASIC_MAX_TEMP`, bits 0–8**, contains whole degrees Celsius. Access it through BAR5 byte offsets `0x210` (selector) and `0x214` (data):
+Polaris 10/11/12 IDs are accepted, including RX470/480/570/580 variants. An **Untested profile** label does not block readings.
+
+| Variant | Active units | Hardware validation |
+|---|---|---|
+| RX580 2048SP | 32 CUs / 2048 shaders | Validated under load |
+| RX550 / Lexa | 8 CUs / 512 shaders | Validated under load |
+| RX580 (full configuration) | 36 CUs / 2304 shaders | Accepted; not physically validated |
+
+Validation applies to the recorded configurations, not every board sharing their PCI IDs. Testing the 2048SP variant does not validate the full RX580.
+
+## Minimal register recipe
+
+SMU register **`CG_MULT_THERMAL_STATUS = 0xC0300014`** contains hotspot in **bits 0�8** and GPU temperature in **bits 9�17**, in whole degrees Celsius. Access it through BAR5 byte offsets `0x210` (selector) and `0x214` (data):
 
 ```cpp
 auto saved = read32(0x210);
 write32(0x210, 0xC0300014);
 auto raw = read32(0x214);
 write32(0x210, saved);
+
 auto hotspot_c = raw & 0x1FF;
+auto gpu_c = (raw >> 9) & 0x1FF;
+auto delta_c = int(hotspot_c) - int(gpu_c);
 ```
 
-**Two reads and two writes**, excluding synchronization and validation. The functions above are MMIO transport placeholders, not OS APIs. DWORD-indexed transports use indices `0x84` and `0x85` instead of byte offsets.
+**Two reads and two writes**, excluding synchronization and validation. `read32` and `write32` are MMIO transport placeholders. DWORD-indexed transports use `0x84` and `0x85` instead.
 
-The [C++ header](include/polaris_hotspot.hpp) adds selector checks and restoration on errors. The caller must coordinate access to the shared selector for the entire transaction. A cooperating Windows monitor can use `Global\Access_PCI`; this does not guarantee cooperation from every driver. No DRAM command, rendering hook or sensor mailbox request is needed. This reads telemetry already maintained by the GPU.
+The [C++ header](include/polaris_hotspot.hpp) adds selector checks and restoration on errors. The caller must coordinate access for the entire transaction. The Windows app uses `Global\Access_PCI`, which other drivers may not honor. This reads telemetry already maintained by the GPU.
 
-## Variant validation
+## Evidence and example
 
-| Variant | Active units | Hardware validation |
-|---|---|---|
-| RX580 2048SP | 32 CUs / 2048 shaders | Validated, including under load |
-| RX550 / Lexa | 8 CUs / 512 shaders | Validated, including under load |
-| RX580 (full configuration) | 36 CUs / 2304 shaders | Accepted by the reader; not physically validated in the recorded tests |
+[Validation records and test conditions](docs/validation.md) � [RX580 2048SP data](evidence/) � [RX550 data](evidence/rx550/)
 
-Support for a PCI ID does not imply validation of every variant using it. RX580 2048SP results do not establish validation of the full RX580 configuration.
+Matched reference comparisons had mean absolute errors of **0.1169 �C** on RX580 2048SP and **0.0962 �C** on RX550. The datasets include analyzers and checksums. They validate the firmware reading against reference telemetry, not external physical calibration.
 
-## Recorded hardware evidence
-
-| | RX580 2048SP | RX 550 / Lexa |
-|---|---|---|
-| PCI device | `1002:6FDF` | `1002:699F` |
-| Revision / subsystem | `EF` / `1682:E580` | `C7` / `1002:0B04` |
-| Date | 2026-10-20 | 2026-10-27 |
-| Register samples / restored selectors | 67 / 67 | 158 / 158 |
-| Matched reference pairs | 59 | 150 |
-| Mean absolute error vs reference hotspot | 0.1169 °C | 0.0962 °C |
-| Maximum absolute error vs reference hotspot | 1.37 °C | 1.41 °C |
-| Mean absolute error vs reference edge | 5.2571 °C | 3.9293 °C |
-| Observed hotspot range | 34–66 °C | 28–48 °C |
-
-RX580 2048SP example: **`0x00007242 → 66 °C`**, reference hotspot **66.00 °C**, edge **58.43 °C**.
-
-RX 550 example: **`0x00005430 → 48 °C`**, reference hotspot **48.00 °C**, edge **43.43 °C**, graphics activity **100%**. Among 135 pairs with graphics activity ≥90%, mean absolute error vs hotspot was **0.0778 °C**. 149 of all 150 pairs were within 1 °C.
-
-Both tests used Linux 4.4.0-21 without a bound graphics driver, a short graphics load, reference telemetry every 50 ms and register sampling approximately every 200 ms. The reference process group was briefly stopped during each indirect-register transaction and resumed after restoration; GPU work itself was not explicitly paused. Average/max process pauses were 5.062/6.050 ms on RX580 2048SP and 4.456/5.561 ms on RX 550. Actual maximum timestamp separation was 3.402 ms and 25.364 ms respectively (40 ms pairing limit).
-
-RX 550 load completed successfully in **30.993 seconds**; total supervision was **32.871 seconds**. Hardware watchdog remained active (180 seconds, feed every 30 seconds). Original boot power mode was restored (214 MHz engine / 300 MHz memory); no reboot, new kernel messages or remaining test processes. No manual voltage, fan or clock values were set.
-
-These results validate the firmware-reported hotspot on the two recorded boards, not external physical calibration or all Polaris models. Tool names and unrelated fields are omitted from the public evidence; original logs are retained in the bench archive. The reference collector is not distributed, so the public data supports independent recomputation of this comparison, not end-to-end reproduction of the reference acquisition.
-
-## Check the evidence
-
-[RX580 2048SP data](evidence/) · [RX 550 data](evidence/rx550/)
-
-Each dataset includes register samples, a reduced reference CSV, matched pairs, comparison metrics, an analyzer and SHA-256 hashes. Reference timestamps are standardized to UTC; measured values and sample pairing are unchanged.
-
-```sh
-python3 evidence/analyze.py
-python3 evidence/rx550/analyze.py
-```
-
-These commands regenerate the two analysis JSON files in each directory. Numeric results match the archived analysis within floating-point rounding; serialization and key order may differ.
-
-## Minimal C++ example
+The standalone example decodes a raw word without accessing hardware:
 
 ```sh
 c++ -std=c++11 -Wall -Wextra -Iinclude examples/decode.cpp -o decode
@@ -87,11 +61,4 @@ c++ -std=c++11 -Wall -Wextra -Iinclude examples/decode.cpp -o decode
 # 48 C
 ```
 
-MSVC developer command prompt:
-
-```bat
-cl /nologo /EHsc /W4 /Iinclude examples\decode.cpp /Fe:decode.exe
-decode.exe 0x00005430
-```
-
-This example decodes a raw word without accessing hardware. For live reads, supply an MMIO transport to the header. No kernel driver, proprietary binary, firmware image or memory-temperature collector is included.
+No kernel driver or proprietary firmware is bundled.
